@@ -27,3 +27,5 @@ for f in \
 done
 printf '\nAll runtime model and library files are present locally.\n'
 du -sh "$ROOT/assets/vendor" "$ROOT/assets/models"
+
+python3 "$ROOT/scripts/verify_assets.py"

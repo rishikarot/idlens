@@ -1,13 +1,13 @@
-# ID Lens v3.0.0 — offline-first Aadhaar QR + face-comparison MVP
+# ID Lens v3.0.1 — offline-first Aadhaar QR + face-comparison MVP
 
 **Build date:** 20 October 2026 (IST).  **Status:** prototype, **not official Aadhaar verification**.
 
 ## Deploy to GitHub Pages
 
-1. Create a public or private repository and upload **all files/folders** from this project, keeping `.github/workflows/deploy.yml` intact. Use `main` as the branch.
+1. Create a repository, unpack all contents into its root, **including the hidden `.github` directory**, and push to `main` or `master`.
 2. In GitHub repo **Settings → Pages → Build and deployment**, choose **GitHub Actions**.
 3. The `Publish ID Lens (offline assets)` workflow downloads pinned JS libraries and face-api model weights as a **build step**, bundles them in the generated Pages artifact and publishes them under your own GitHub Pages origin.
-4. When the workflow completes, open the Pages URL using HTTPS. The first visit loads the locally hosted assets and starts a service worker that caches them for later offline use. The first visit still requires connectivity. Later visits can work without an internet connection as long as the browser has not evicted the cache.
+4. When the workflow completes, open the Pages URL using HTTPS. The page will show an **Installation health** panel. It reads `asset-manifest.json` produced by the build. All checks must pass. The first visit loads the locally hosted assets and starts a service worker that caches them for later offline use. The first visit still requires connectivity. Later visits can work without an internet connection as long as the browser has not evicted the cache.
 5. In Safari/Chrome, allow the camera when prompted. If permissions are unavailable, use the upload options.
 
 **Why the distributable is a source ZIP, not one HTML file:**  Real neural-network weights are several MB of binary data and must be served alongside `index.html`. They are **not embedded in the HTML**, nor fetched from public CDNs by end-user browsers. This ZIP ships the app and a reproducible GitHub Actions dependency-bundling step; models are not included as bytes until that step finishes. If you need a physically complete air-gapped ZIP, run `bash scripts/fetch_assets.sh` with internet on your developer machine, then zip the populated folder; thereafter serving and face comparison need no outside network.
@@ -80,4 +80,18 @@ To create a compatible pack from bundled files, produce SHA-256 hashes with `sha
 
 ## Version
 
-`ID Lens v3.0.0`, built 20 October 2026 IST, displayed in the page footer.
+`ID Lens v3.0.1`, built 20 October 2026 IST, displayed in the page footer.
+
+## Fix for “Offline QR reader not yet installed”
+
+The downloadable *source* archive contains no binary JS/model assets; they are fetched during the GitHub Actions build. If Pages is configured to publish directly from a branch, `assets/vendor/jsQR.js` returns HTTP 404, so the original v3.0.0 reports “Offline QR Reader not yet installed”.
+
+1. GitHub → **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+2. **Actions** → **Publish ID Lens (offline assets)** → **Run workflow**. Wait until both `build` and `deploy` are successful. Ensure `.github/workflows/deploy.yml` is present in the repo, especially when uploading via browser.
+3. Check `https://<your-pages-url>/asset-manifest.json`: it should contain `"built": true`, `"version": "3.0.1"`. Next visit `<your-pages-url>/assets/vendor/jsQR.js` — it should return JavaScript, not a 404 page.
+4. Open the app and press **Check installation**; it lists every missing JS/weight URL. If an old service worker is serving stale code, press **Clear old app cache & reload**.
+5. For **branch-based Pages**, run `bash scripts/fetch_assets.sh` locally, commit `assets/vendor`, `assets/models`, `asset-manifest.json`, and publish those files. `.gitignore` no longer blocks these assets. Note that cache/offline support and camera require HTTPS (or localhost).
+
+**Failures diagnosed by v3.0.1:** missing JS reader, missing jpeg2000/PDF decoder, missing face-api.js, missing manifests or model shard files, missing build manifest, broken deployment strategy, and stale offline caches. The app does **not** auto-download third-party libraries from CDNs at runtime, preserving its offline-first design.
+
+The true runtime model has not been end-to-end benchmarked here with real Aadhaar cards and selfies. This is a prototype with unsigned QR content and no liveness check.

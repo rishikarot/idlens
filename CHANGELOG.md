@@ -1,13 +1,10 @@
-# Changelog
+# ID Lens v3.0.1 — 20 Oct 2026
 
-## v3.0.0 — 20 October 2026
-
-- Replaced runtime external CDN dependencies with local hosting and GitHub Actions dependency bundling (service-worker cache after first online load).
-- Enhanced local recognition pipeline (SSD MobileNet v1 + full 68-point landmarks + existing 128-D recognition network); optional lightweight bundled pipeline for lower-powered phones.
-- Added SHA-256-verified compatible model-pack download, client-only cached update selection, and rollback to bundled enhanced default.
-- Added adjustable success/review thresholds, presets, reset to defaults, explanatory decision formula, Euclidean face distance and approximate similarity-index display.
-- Improved QR crop with original-image coordinate mapping, movable selection/handles, zoom, pan, rotate and real cropped-region preview.
-- Corrected manual-reference photo provenance so an uploaded test image is never labeled a QR-extracted portrait.
-- Displayed version and IST build date/time at the bottom of the page.
-
-**Scope:** Browser workflow logic tested with synthetic QR data and stubbed face inference. Actual model binaries and accuracy against genuine Aadhaar cards should be tested after the GitHub Actions first deployment. Not UIDAI-certified; no QR digital signature or liveness validation.
+- Added in-page setup diagnostics for shipped QR decoder, JPEG2000, PDF reader, face-api and weight shards.
+- Added actionable repair instructions and one-click cache reset.
+- Fixed setup headline incorrectly saying offline-ready before files are validated.
+- Added build verifier, generated asset-manifest.json and CI checks for all 16 assets.
+- Ensure GitHub Actions publish is the source; workflow runs on main or master.
+- Removed ignore rules that prevented locally fetched binary assets from being committed to a branch deployment.
+- Service worker refuses to activate incomplete offline cache, instead of quietly treating missing files as successes.
+- Preserved all v3 crop, matching, model update and threshold features.

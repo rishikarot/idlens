@@ -1,7 +1,7 @@
-/* ID Lens v3.0.0 — browser-local QR + face comparison; not official UIDAI authentication. */
+/* ID Lens v3.0.1 — browser-local QR + face comparison; not official UIDAI authentication. */
 (()=>{'use strict';
 const $ = id => document.getElementById(id);
-const APP_VERSION = '3.0.0';
+const APP_VERSION = '3.0.1';
 const DEFAULTS={success:80,review:72,model:'enhanced'};
 const CACHE_PREFIX='id-lens-update-';
 let qrStream=null,selfieStream=null,scanTimer=null,qrGeneration=0,session=0;
@@ -65,7 +65,7 @@ function getPhotoBytes(raw,offset,flags){const skip=(flags==='1'||flags==='3'?32
  let start=-1,suffix='j2k';if(b>=offset&&(a<0||b<a)){start=b;suffix='jp2'}else if(a>=offset)start=a;
  if(start<0)return null;if(start-offset>30)throw Error('Unexpected Aadhaar portrait field format');let end=endLimit;
  if(suffix==='j2k'){const e=seek(raw,[255,217],start+4);if(e>=0)end=Math.min(endLimit,e+2)}if(end-start<35)throw Error('Embedded portrait is incomplete');return{bytes:raw.slice(start,end),suffix};}
-async function decodePhoto(obj,token){if(typeof window.openjpeg!=='function')throw Error('Local JPEG 2000 decoder missing. Deploy bundled assets first.');
+async function decodePhoto(obj,token){if(typeof window.openjpeg!=='function')throw Error('JPEG 2000 photo decoder is missing. Check installation above.');
  const data=window.openjpeg(Array.from(obj.bytes),obj.suffix);if(token!==session)return null;
  if(!data||data.error||!data.width||!data.height)throw Error(data?.error||'Decoder could not read QR portrait');
  const w=data.width,h=data.height,n=w*h;if(n>4000000||!data.data||data.data.length<n*3)throw Error('Unexpected JPEG 2000 image data');
@@ -81,7 +81,7 @@ async function decodeNumeric(s){const token=++session;info('qrStatus','Decoding 
 function scaledCanvas(src,x,y,w,h,max){const c=document.createElement('canvas');const ratio=Math.min(1,max/Math.max(w,h));c.width=Math.max(1,Math.round(w*ratio));c.height=Math.max(1,Math.round(h*ratio));
  c.getContext('2d',{willReadFrequently:true}).drawImage(src,x,y,w,h,0,0,c.width,c.height);return c;}
 async function qrFromCanvas(canvas){if('BarcodeDetector' in window){try{const codes=await new BarcodeDetector({formats:['qr_code']}).detect(canvas);if(codes.length&&codes[0].rawValue)return codes[0].rawValue}catch(e){}}
- if(typeof window.jsQR!=='function')throw Error('Offline QR reader not yet installed. Deploy bundled assets.');
+ if(typeof window.jsQR!=='function')throw Error('QR reader unavailable: jsQR.js is missing from this deployment. Open Check installation above; publish with the supplied GitHub Actions workflow or include the built assets.');
  const pixels=canvas.getContext('2d',{willReadFrequently:true}).getImageData(0,0,canvas.width,canvas.height);
  return window.jsQR(pixels.data,canvas.width,canvas.height,{inversionAttempts:'attemptBoth'})?.data||null;}
 async function scanImageRegion(src,x=0,y=0,w=src.width,h=src.height){
@@ -129,11 +129,11 @@ function cropPointerMove(e){if(!pointer||!currentSource)return;e.preventDefault(
 function cropPointerEnd(){pointer=null;if(crop&&(crop.w<12||crop.h<12))crop=null;drawPreview();}
 async function processCanvas(src,label=''){previewSource(src);info('qrStatus',label+'Looking for Secure QR…');
  try{const numeric=await scanImageRegion(src);if(numeric)await decodeNumeric(numeric);else info('qrStatus','QR not found automatically. Use the optional crop editor: select the QR, zoom and press Scan selected area.','error');}
- catch(e){info('qrStatus','QR scan error: '+e.message,'error')}}
+ catch(e){info('qrStatus','QR scan error: '+e.message,'error');checkInstallation()}}
 async function readImage(file){const url=URL.createObjectURL(file);try{const img=new Image();img.src=url;await img.decode();if(img.naturalWidth*img.naturalHeight>45000000)throw Error('Image resolution too large');const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;c.getContext('2d').drawImage(img,0,0);return c}finally{URL.revokeObjectURL(url)}}
 async function processFile(file){if(!file)return;stopQr();++session;try{if(file.size>25*1024*1024)throw Error('File too large (25 MB limit)');
  if(file.type==='application/pdf'||/\.pdf$/i.test(file.name)){
- if(!window.pdfjsLib)throw Error('Local PDF reader unavailable; deploy assets first');info('qrStatus','Opening PDF…');
+ if(!window.pdfjsLib)throw Error('PDF reader missing. Check installation above and publish with GitHub Actions');info('qrStatus','Opening PDF…');
  const pdf=await pdfjsLib.getDocument({data:new Uint8Array(await file.arrayBuffer()),disableWorker:true}).promise;let last=null;
  for(let i=1;i<=Math.min(pdf.numPages,3);i++){info('qrStatus',`Reading PDF page ${i}…`);const page=await pdf.getPage(i),vp=page.getViewport({scale:3});const c=document.createElement('canvas');c.width=Math.round(vp.width);c.height=Math.round(vp.height);
  await page.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;last=c;const payload=await scanImageRegion(c);
@@ -171,7 +171,7 @@ function enhancePortrait(img){const w=img.naturalWidth,h=img.naturalHeight;if(Ma
  const scale=Math.min(5,Math.max(1,Math.ceil(360/Math.min(w,h))));const c=document.createElement('canvas');c.width=w*scale;c.height=h*scale;
  const ctx=c.getContext('2d');ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(img,0,0,c.width,c.height);return c;}
 async function faceModels(){if(faceModelPromise)return faceModelPromise;
- faceModelPromise=(async()=>{if(!window.faceapi)throw Error('face-api.js bundle not found. GitHub Actions must deploy ./assets/vendor/face-api.min.js');
+ faceModelPromise=(async()=>{if(!window.faceapi)throw Error('Face recognition library missing. Check installation above and publish with GitHub Actions.');
  const m=prefs.model==='updated'&&updatedPack()?updatedPack():null;
  if(prefs.model==='updated'&&!m){prefs.model='enhanced';saved()}
  const base=m?'./model-updates/'+m.id:'./assets/models';
@@ -249,6 +249,86 @@ async function installUpdate(){const btn=$('installModel');btn.disabled=true;try
  }catch(e){info('modelManagerStatus','Update not installed: '+e.message,'error')}finally{btn.disabled=false}}
 async function restoreDefault(){const packs=await caches.keys();for(const key of packs){if(key.startsWith(CACHE_PREFIX))await caches.delete(key)}
  localStorage.removeItem('idlens-v3-pack');prefs.model='enhanced';saved();activeModelStatus();info('modelManagerStatus','Bundled default restored. Reloading…','ok');setTimeout(()=>location.reload(),700)}
+// GitHub Pages provisioning diagnostics. Never reads or stores biometric images.
+const HEALTH_ASSETS=[
+ ['./asset-manifest.json','Build manifest','build'],
+ ['./assets/vendor/jsQR.js','QR decoder','jsqr'],
+ ['./assets/vendor/openjpeg.js','JPEG 2000 decoder','jpeg2000'],
+ ['./assets/vendor/pdf.min.js','PDF decoder','pdf'],
+ ['./assets/vendor/face-api.min.js','Face AI code','face'],
+ ['./assets/models/ssd_mobilenetv1_model-weights_manifest.json','Face detector model','model'],
+ ['./assets/models/face_landmark_68_model-weights_manifest.json','Facial landmarks model','model'],
+ ['./assets/models/face_recognition_model-weights_manifest.json','Face recognition model','model'],
+ ['./assets/models/face_recognition_model-shard1','Face recognition weights 1','weights'],
+ ['./assets/models/face_recognition_model-shard2','Face recognition weights 2','weights'],
+ ['./assets/models/ssd_mobilenetv1_model-shard1','Face detector weights 1','weights'],
+ ['./assets/models/ssd_mobilenetv1_model-shard2','Face detector weights 2','weights'],
+ ['./assets/models/face_landmark_68_model-shard1','Facial landmark weights','weights']
+];
+let healthBusy=false;
+async function probe(path,label,type){
+ try{
+  // Cache bypass stops a stale service worker from masquerading as a new deployment.
+  const url=new URL(path,location.href);
+  const response=await fetch(url.href,{method:'HEAD',cache:'no-store'});
+  if(!response.ok)return {label,type,ok:false,why:'HTTP '+response.status,path};
+  const ct=response.headers.get('content-type')||'';
+  if(type==='build'){
+    const r=await fetch(url.href,{cache:'no-store'});
+    const text=await r.text();
+    try{const data=JSON.parse(text);if(data.built!==true||data.version!=='3.0.1'||!Array.isArray(data.files))throw Error('Invalid build manifest');
+      return {label,type,ok:true,path,size:JSON.stringify(data.files).length};
+    }catch(e){return {label,type,ok:false,why:'Not a v3.0.1 asset build',path};}
+  }
+  const length=Number(response.headers.get('content-length'));
+  if(ct.includes('text/html'))return {label,type,ok:false,why:'HTML returned instead of asset',path};
+  // Missing assets on Pages often return HTML with HTTP 200 on SPA fallbacks.
+  if(Number.isFinite(length)&&length>0&&length<(type==='weights'?4000:type==='model'?50:400))return {label,type,ok:false,why:'Asset suspiciously small ('+length+' bytes)',path};
+  return {label,type,ok:true,path};
+ }catch(e){
+   // HEAD cannot be answered by the GET-only service worker while fully offline.
+   // An already-cached app remains usable without any network.
+   try{
+     if('caches' in window){const saved=await caches.match(new URL(path,location.href));
+       if(saved&&saved.ok){if(type==='build'){const d=await saved.clone().json();if(d.built!==true||d.version!=='3.0.1')throw Error('Outdated build manifest')}
+         return {label,type,ok:true,path,cached:true};}}
+   }catch(ignore){}
+   return {label,type,ok:false,why:e.message,path};
+ }
+}
+async function checkInstallation(){
+ if(healthBusy)return;healthBusy=true;
+ $('installHeadline').textContent='Checking deployed libraries and weights…';$('installationHealth').className='health';$('checkInstallation').disabled=true;
+ try{
+  const results=await Promise.all(HEALTH_ASSETS.map(row=>probe(...row)));
+  const bad=results.filter(r=>!r.ok);
+  const requiredLoaded=typeof window.jsQR==='function'&&typeof window.openjpeg==='function'&&!!window.pdfjsLib&&!!window.faceapi;
+  const details=results.map(r=>(r.ok?'✓ ':'✗ ')+r.label+' · '+r.path+(r.ok?'':' ('+r.why+')'));
+  if(!requiredLoaded){const miss=[typeof window.jsQR==='function'?null:'jsQR',typeof window.openjpeg==='function'?null:'openjpeg',window.pdfjsLib?null:'pdfjs',window.faceapi?null:'face-api'].filter(Boolean);details.push('Loaded JS globals missing: '+miss.join(', '));}
+  $('installDetails').textContent=details.join('\n');
+  if(bad.length||!requiredLoaded){
+    $('installationHealth').className='health bad';$('installHeadline').textContent='Installation incomplete · '+bad.length+' missing / invalid files';
+    $('installSummary').textContent='QR or face functions may fail. The source ZIP does not contain downloaded model binaries. In GitHub Settings → Pages select GitHub Actions, then run “Publish ID Lens (offline assets)” and verify the build succeeds. If you use branch deployment, run scripts/fetch_assets.sh and commit assets/vendor and assets/models before publishing.';
+    $('siteStatus').textContent='Setup incomplete · Demo only';
+  }else{
+    $('installationHealth').className='health good';$('installHeadline').textContent='Runtime files installed ('+results.length+'/'+results.length+')';
+    $('installSummary').textContent='Bundled QR, PDF, photo and recognition assets are hosted on this origin. First visit needs internet; offline use works after they have been cached.';
+    $('siteStatus').textContent='Local assets ready · Demo only';
+  }
+ }catch(e){$('installHeadline').textContent='Installation check failed';$('installSummary').textContent=e.message;}
+ finally{healthBusy=false;$('checkInstallation').disabled=false;}
+}
+async function repairInstallation(){
+ if(!confirm('Remove only ID Lens offline caches and reload? Personal images are not cached. Model update downloads will be retained.'))return;
+ info('qrStatus','Removing old ID Lens runtime cache…');
+ try{
+  if('caches' in window){for(const key of await caches.keys()){if(key.startsWith('idlens-v')&&key.endsWith('-static'))await caches.delete(key)}}
+  if('serviceWorker' in navigator){const r=await navigator.serviceWorker.getRegistration('./');if(r)await r.update();}
+  location.reload();
+ }catch(e){$('installSummary').textContent='Cache refresh failed: '+e.message}
+}
+$('checkInstallation').addEventListener('click',checkInstallation);
+$('repairInstallation').addEventListener('click',repairInstallation);
 // UI events
 $('sourceCanvas').addEventListener('pointerdown',cropPointerDown);$('sourceCanvas').addEventListener('pointermove',cropPointerMove);
 for(const ev of ['pointerup','pointercancel','lostpointercapture'])$('sourceCanvas').addEventListener(ev,cropPointerEnd);
@@ -275,5 +355,5 @@ async function initSW(){if(!('serviceWorker' in navigator)||!location.protocol.s
  try{await navigator.serviceWorker.register('./sw.js',{scope:'./'});const reg=await navigator.serviceWorker.ready;
  if(reg&&navigator.serviceWorker.controller){$('modelManagerStatus').textContent='Default models load locally; offline cache is active. Optional updates require a compatible manifest.'}
  }catch(e){info('modelManagerStatus','Offline cache unavailable: '+e.message,'error')}}
-syncThresholdUI();activeModelStatus();refreshControls();initSW();
+syncThresholdUI();activeModelStatus();refreshControls();initSW();setTimeout(checkInstallation,100);
 })();

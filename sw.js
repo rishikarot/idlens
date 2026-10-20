@@ -1,7 +1,7 @@
 /* ID Lens v3: same-origin cache only. No personal data, images or QR payloads are cached. */
-const VERSION='idlens-v3.0.0-static';
+const VERSION='idlens-v3.0.1-static';
 const STATIC=['./','./index.html','./app.js','./sw.js','./manifest.webmanifest','./updates/channel.json',
- './assets/vendor/face-api.min.js','./assets/vendor/jsQR.js','./assets/vendor/openjpeg.js','./assets/vendor/pdf.min.js',
+ './asset-manifest.json','./assets/vendor/face-api.min.js','./assets/vendor/jsQR.js','./assets/vendor/openjpeg.js','./assets/vendor/pdf.min.js',
  './assets/models/ssd_mobilenetv1_model-weights_manifest.json','./assets/models/ssd_mobilenetv1_model-shard1','./assets/models/ssd_mobilenetv1_model-shard2',
  './assets/models/face_landmark_68_model-weights_manifest.json','./assets/models/face_landmark_68_model-shard1',
  './assets/models/face_recognition_model-weights_manifest.json','./assets/models/face_recognition_model-shard1','./assets/models/face_recognition_model-shard2',
@@ -9,11 +9,15 @@ const STATIC=['./','./index.html','./app.js','./sw.js','./manifest.webmanifest',
  './assets/models/face_landmark_68_tiny_model-weights_manifest.json','./assets/models/face_landmark_68_tiny_model-shard1'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{
  const cache=await caches.open(VERSION);
- // A single unavailable optional asset should not break offline activation.
- await Promise.allSettled(STATIC.map(async asset=>{
-  const request=new Request(new URL(asset,self.registration.scope),{cache:'reload'});
-  const r=await fetch(request);if(r.ok)await cache.put(request,r);
- }));await self.skipWaiting();
+ // Do not activate an offline cache that is missing critical application files.
+ for(let i=0;i<STATIC.length;i+=4){
+   await Promise.all(STATIC.slice(i,i+4).map(async asset=>{
+    const request=new Request(new URL(asset,self.registration.scope),{cache:'reload'});
+    const r=await fetch(request);
+    if(!r.ok)throw new Error('Missing offline asset: '+asset+' (HTTP '+r.status+')');
+    await cache.put(request,r);
+   }));
+ }await self.skipWaiting();
 })()));
 self.addEventListener('activate',event=>event.waitUntil((async()=>{
  const names=await caches.keys();await Promise.all(names.filter(n=>n.startsWith('idlens-v')&&n.endsWith('-static')&&n!==VERSION).map(n=>caches.delete(n)));
