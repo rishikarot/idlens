@@ -14,6 +14,7 @@ fetch(){
 # Pin npm versions. Dynamic CDN fetches are NOT used by the published browser app.
 fetch 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js' "$ROOT/assets/vendor/face-api.min.js"
 fetch 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js' "$ROOT/assets/vendor/jsQR.js"
+fetch 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js' "$ROOT/assets/vendor/zxing.min.js"
 fetch 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js' "$ROOT/assets/vendor/pdf.min.js"
 fetch 'https://raw.githubusercontent.com/kripken/j2k.js/master/openjpeg.js' "$ROOT/assets/vendor/openjpeg.js"
 BASE='https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'

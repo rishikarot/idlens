@@ -1,3 +1,11 @@
+# ID Lens v3.1.0 — 20 Oct 2026 · 10:26 PM IST
+
+- Scans dense QR from full Aadhaar images using multi-region multi-pass decoding and bundled ZXing fallback.
+- Adds quick-select crop presets for all four corners and center, preserving original image resolution.
+- Improves low-light / compressed selfie handling with quality-guided conservative correction and consistent result rules.
+- Captures best of 3 local video frames; does not imply liveness.
+- Bundles new QR decoder for offline after initial deployment.
+
 # ID Lens v3.0.1 — 20 Oct 2026
 
 - Added in-page setup diagnostics for shipped QR decoder, JPEG2000, PDF reader, face-api and weight shards.

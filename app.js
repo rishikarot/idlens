@@ -1,7 +1,7 @@
-/* ID Lens v3.0.1 — browser-local QR + face comparison; not official UIDAI authentication. */
+/* ID Lens v3.1.0 — browser-local QR + face comparison; not official UIDAI authentication. */
 (()=>{'use strict';
 const $ = id => document.getElementById(id);
-const APP_VERSION = '3.0.1';
+const APP_VERSION = '3.1.0';
 const DEFAULTS={success:80,review:72,model:'enhanced'};
 const CACHE_PREFIX='id-lens-update-';
 let qrStream=null,selfieStream=null,scanTimer=null,qrGeneration=0,session=0;
@@ -26,13 +26,13 @@ function refreshControls(){const enabled=qrReady;$('facePanel').classList.toggle
  $('step1').className='step '+(enabled?'done':'current');$('step2').className='step '+(enabled?'current':'');
  $('faceTag').textContent=!enabled?'Waiting for QR':portraitFound?'QR photo ready':sourceType==='demo'?'Demo ready':'QR photo unavailable';
  $('openSelfie').disabled=!enabled;$('matchButton').disabled=!(enabled&&ref&&selfie&&$('consent').checked);}
-function clearPictures(){ref='';selfie='';portraitFound=false;knownRefSource='none';lastDistance=null;
+function clearPictures(){matchQualityReview=false;matchDiagnostics='';ref='';selfie='';portraitFound=false;knownRefSource='none';lastDistance=null;
  for(const [img,empty] of [['refImg','refEmpty'],['selfieImg','selfieEmpty']]){$(img).removeAttribute('src');$(img).classList.add('hidden');$(empty).classList.remove('hidden')}
  showResult('Not compared',null,'A QR reference portrait and current selfie are required for a QR-photo comparison.');refreshControls();}
 function setPicture(type,url,origin='manual'){
  if(type==='ref'){ref=url;portraitFound=(origin==='qr');knownRefSource=origin;$('refImg').src=url;$('refImg').classList.remove('hidden');$('refEmpty').classList.add('hidden');}
  else{selfie=url;$('selfieImg').src=url;$('selfieImg').classList.remove('hidden');$('selfieEmpty').classList.add('hidden')}
- lastDistance=null;showResult('Ready for comparison',null,'Two photos selected. Results will be labelled as QR-photo or manual-photo tests.');
+ lastDistance=null;matchQualityReview=false;matchDiagnostics='';showResult('Ready for comparison',null,'Two photos selected. Results will be labelled as QR-photo or manual-photo tests.');
  photoFallback();refreshControls();
 }
 function photoFallback(){const yes=!portraitFound&&qrReady;$('fallbackLabel').classList.toggle('hidden',!yes);
@@ -80,24 +80,76 @@ async function decodeNumeric(s){const token=++session;info('qrStatus','Decoding 
  }catch(e){if(token===session)info('qrStatus',e.message,'error')}}
 function scaledCanvas(src,x,y,w,h,max){const c=document.createElement('canvas');const ratio=Math.min(1,max/Math.max(w,h));c.width=Math.max(1,Math.round(w*ratio));c.height=Math.max(1,Math.round(h*ratio));
  c.getContext('2d',{willReadFrequently:true}).drawImage(src,x,y,w,h,0,0,c.width,c.height);return c;}
-async function qrFromCanvas(canvas){if('BarcodeDetector' in window){try{const codes=await new BarcodeDetector({formats:['qr_code']}).detect(canvas);if(codes.length&&codes[0].rawValue)return codes[0].rawValue}catch(e){}}
- if(typeof window.jsQR!=='function')throw Error('QR reader unavailable: jsQR.js is missing from this deployment. Open Check installation above; publish with the supplied GitHub Actions workflow or include the built assets.');
- const pixels=canvas.getContext('2d',{willReadFrequently:true}).getImageData(0,0,canvas.width,canvas.height);
- return window.jsQR(pixels.data,canvas.width,canvas.height,{inversionAttempts:'attemptBoth'})?.data||null;}
+// All detection happens on-device. Native BarcodeDetector, jsQR and ZXing are
+// independent decoders; ZXing is packaged locally with this app, never CDN-loaded.
+async function qrFromCanvas(canvas,withZxing=true){
+ if('BarcodeDetector' in window){try{const b=new BarcodeDetector({formats:['qr_code']});const codes=await b.detect(canvas);const value=codes.find(r=>r.rawValue)?.rawValue;if(value)return value;}catch(e){}}
+ if(typeof window.jsQR!=='function')throw Error('Offline jsQR reader missing — check installation.');
+ const ctx=canvas.getContext('2d',{willReadFrequently:true});const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);
+ try{const qr=window.jsQR(pixels.data,canvas.width,canvas.height,{inversionAttempts:'attemptBoth'});if(qr?.data)return qr.data;}catch(e){}
+ if(withZxing&&window.ZXing?.BrowserQRCodeReader){
+  try{const reader=new ZXing.BrowserQRCodeReader();const code=await reader.decodeFromCanvas(canvas);return code?.getText?.()||code?.text||null;}catch(e){}
+ }
+ return null;
+}
+// Edits temporary scan pixels only. Low resolution of the QR cannot be repaired
+// from an image that no longer contains enough actual modules/pixels.
+function qrContrastCanvas(base,mode){
+ const c=document.createElement('canvas');c.width=base.width;c.height=base.height;const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(base,0,0);
+ const pix=ctx.getImageData(0,0,c.width,c.height),d=pix.data,hist=new Uint32Array(256);
+ for(let i=0;i<d.length;i+=4)hist[Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2])]++;
+ const total=d.length/4,cut=total*.015;let lo=0,hi=255,k=0;
+ for(let i=0;i<256;i++){k+=hist[i];if(k>=cut){lo=i;break}}k=0;
+ for(let i=255;i>=0;i--){k+=hist[i];if(k>=cut){hi=i;break}}
+ const range=Math.max(50,hi-lo);
+ for(let i=0;i<d.length;i+=4){const v=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);const normalized=clamp(Math.round((v-lo)*255/range),0,255);
+  const out=mode==='threshold'?(normalized>145?255:0):clamp((normalized-128)*1.1+128,0,255);d[i]=d[i+1]=d[i+2]=out;}
+ ctx.putImageData(pix,0,0);return c;
+}
+function scanRegions(w,h,x,y){
+ const area=(fx,fy,fw,fh,max,label)=>[x+Math.round(w*fx),y+Math.round(h*fy),Math.round(w*fw),Math.round(h*fh),max,label];
+ // Full scan, then common top/bottom locations for both Aadhaar and e-Aadhaar.
+ const list=[area(0,0,1,1,2500,'full image')];
+ for(const [name,fx,fy] of [['bottom right',.44,.44],['top right',.44,0],['bottom left',0,.44],['top left',0,0]])list.push(area(fx,fy,.56,.56,2100,name));
+ // Smaller windows preserve more QR pixels in high-resolution full-card photos.
+ for(const [name,fx,fy] of [['bottom right detail',.65,.65],['top right detail',.65,0],['bottom left detail',0,.65],['top left detail',0,0]])list.push(area(fx,fy,.35,.35,1800,name));
+ list.push(area(.2,.2,.6,.6,2100,'centre'),area(0,0,1,1,1600,'reduced image'));
+ return list;
+}
+let activeImageScan=0;
 async function scanImageRegion(src,x=0,y=0,w=src.width,h=src.height){
- // Scan original image at high resolution first, then a center/corner grid for dense printed QR.
- const cases=[[x,y,w,h,2400]];
- if(w>900&&h>900){const bw=w*.7,bh=h*.7;for(const [dx,dy] of [[0,0],[1,0],[0,1],[1,1],[.5,.5]])cases.push([x+dx*(w-bw),y+dy*(h-bh),bw,bh,1950]);}
- for(const [px,py,pw,ph,max] of cases){const canvas=scaledCanvas(src,px,py,pw,ph,max);let value=await qrFromCanvas(canvas);if(value)return value;
-  // local contrast boost for low-quality prints; no original pixels are overwritten.
-  if(Math.max(canvas.width,canvas.height)<=2000){const ctx=canvas.getContext('2d',{willReadFrequently:true}),pixels=ctx.getImageData(0,0,canvas.width,canvas.height);
-   const d=pixels.data;for(let i=0;i<d.length;i+=4){const gray=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);const v=clamp((gray-128)*1.55+128,0,255);d[i]=d[i+1]=d[i+2]=v;}ctx.putImageData(pixels,0,0);value=await qrFromCanvas(canvas);if(value)return value;}
-  await new Promise(r=>setTimeout(r,0));}
- return null;}
+ const token=++activeImageScan;
+ if(w<30||h<30)return null;
+ const cases=scanRegions(w,h,x,y),total=cases.length;
+ for(let i=0;i<total;i++){
+  if(token!==activeImageScan)throw Error('Scan replaced by a newer image');
+  const [px,py,pw,ph,max,label]=cases[i];
+  info('qrStatus',`Searching full document QR · ${i+1}/${total} · ${label}…`);
+  const canvas=scaledCanvas(src,px,py,pw,ph,max);
+  let result=await qrFromCanvas(canvas,i<9);if(result)return result;
+  // Escalate to contrast-stretched and binarized copies only for promising tiles.
+  if(i<9){
+   const contrast=qrContrastCanvas(canvas,'stretch');result=await qrFromCanvas(contrast,true);if(result)return result;
+   if(i<5){const threshold=qrContrastCanvas(canvas,'threshold');result=await qrFromCanvas(threshold,false);if(result)return result;}
+  }
+  // Yield to Safari's event loop so progress renders and the page stays responsive.
+  await new Promise(resolve=>setTimeout(resolve,0));
+ }
+ return null;
+}
 // Crop editor uses coordinates of the ORIGINAL uploaded image; zoom and pan affect only its preview.
 function previewSource(src){currentSource=src;crop=null;zoom=1;panX=0;panY=0;moveImage=false;
  $('cropMoveMode').textContent='Move image: OFF';$('sourceWrap').classList.remove('hidden');const c=$('sourceCanvas');const ratio=Math.min(1,900/src.width,620/src.height);
  c.width=Math.max(1,Math.round(src.width*ratio));c.height=Math.max(1,Math.round(src.height*ratio));sizeCropElement();drawPreview();}
+function cropPreset(place){
+ if(!currentSource)return;
+ const w=currentSource.width,h=currentSource.height;
+ const side=.44;
+ const pos={br:[1-side,1-side],tr:[1-side,0],bl:[0,1-side],tl:[0,0],centre:[(1-side)/2,(1-side)/2]}[place]||[1-side,1-side];
+ crop={x:Math.round(w*pos[0]),y:Math.round(h*pos[1]),w:Math.round(w*side),h:Math.round(h*side)};
+ zoom=1;panX=panY=0;moveImage=false;$('cropMoveMode').textContent='Move image: OFF';drawPreview();
+ info('qrStatus','Suggested '+place.toUpperCase()+' crop selected. Adjust handles, then tap Scan selected area.');
+}
 function sizeCropElement(){const c=$('sourceCanvas');if(!c.width||!c.height)return;const available=Math.max(200,c.parentElement.clientWidth-4);const k=Math.min(1,available/c.width,530/c.height);c.style.width=Math.round(c.width*k)+'px';c.style.height=Math.round(c.height*k)+'px';}
 function transform(){const c=$('sourceCanvas'),s=Math.min(c.width/currentSource.width,c.height/currentSource.height)*zoom;
  return{scale:s,x:(c.width-currentSource.width*s)/2+panX,y:(c.height-currentSource.height*s)/2+panY}}
@@ -127,8 +179,8 @@ function cropPointerMove(e){if(!pointer||!currentSource)return;e.preventDefault(
  crop={x:Math.min(x1,x2),y:Math.min(y1,y2),w:Math.abs(x2-x1),h:Math.abs(y2-y1)};}
  drawPreview();}
 function cropPointerEnd(){pointer=null;if(crop&&(crop.w<12||crop.h<12))crop=null;drawPreview();}
-async function processCanvas(src,label=''){previewSource(src);info('qrStatus',label+'Looking for Secure QR…');
- try{const numeric=await scanImageRegion(src);if(numeric)await decodeNumeric(numeric);else info('qrStatus','QR not found automatically. Use the optional crop editor: select the QR, zoom and press Scan selected area.','error');}
+async function processCanvas(src,label=''){++activeImageScan;previewSource(src);info('qrStatus',label+'Looking for Secure QR…');
+ try{const numeric=await scanImageRegion(src);if(numeric)await decodeNumeric(numeric);else{cropPreset('br');info('qrStatus','QR not decoded automatically. Try the suggested bottom-right crop, or choose another QR location below. Very small or blurry QR codes need a closer photograph.','error');}}
  catch(e){info('qrStatus','QR scan error: '+e.message,'error');checkInstallation()}}
 async function readImage(file){const url=URL.createObjectURL(file);try{const img=new Image();img.src=url;await img.decode();if(img.naturalWidth*img.naturalHeight>45000000)throw Error('Image resolution too large');const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;c.getContext('2d').drawImage(img,0,0);return c}finally{URL.revokeObjectURL(url)}}
 async function processFile(file){if(!file)return;stopQr();++session;try{if(file.size>25*1024*1024)throw Error('File too large (25 MB limit)');
@@ -160,16 +212,72 @@ async function openSelfie(){if(!qrReady)return;closeSelfie();stopQr();try{if(!na
  selfieStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'user'},width:{ideal:1280}},audio:false});$('selfieVideo').srcObject=selfieStream;await $('selfieVideo').play();
  $('selfieVideo').classList.remove('hidden');$('captureSelfie').classList.remove('hidden');$('closeSelfie').classList.remove('hidden');$('openSelfie').classList.add('hidden');info('faceStatus','Remove glare, face forward, keep your eyes visible, then capture a selfie.');
  }catch(e){closeSelfie();info('faceStatus',e.message+'. Try Upload / Take selfie.','error')}}
-function captureSelfie(){const v=$('selfieVideo');if(!v.videoWidth)return info('faceStatus','Camera not ready','error');const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;
- const ctx=c.getContext('2d');ctx.translate(c.width,0);ctx.scale(-1,1);ctx.drawImage(v,0,0);setPicture('selfie',c.toDataURL('image/jpeg',.93));closeSelfie();$('selfieInfo').textContent='Captured from camera · liveness not checked';info('faceStatus','Selfie captured. Compare after confirming consent.','ok')}
+async function captureSelfie(){
+ const v=$('selfieVideo');if(!v.videoWidth)return info('faceStatus','Camera not ready','error');
+ const btn=$('captureSelfie');btn.disabled=true;info('faceStatus','Capturing 3 local frames; choosing the clearest…');
+ try{
+  let best=null,bestScore=-Infinity;
+  for(let k=0;k<3;k++){
+   if(!selfieStream)break;
+   const c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;
+   const ctx=c.getContext('2d');ctx.translate(c.width,0);ctx.scale(-1,1);ctx.drawImage(v,0,0);
+   const q=photoQuality(c),score=q.focusScore+Math.min(80,q.contrast)*.35-Math.abs(q.brightness-130)*.35;
+   if(score>bestScore){best=c;bestScore=score;}
+   if(k<2)await new Promise(r=>setTimeout(r,170));
+  }
+  if(!best)throw Error('Camera stopped before capture');
+  setPicture('selfie',best.toDataURL('image/jpeg',.96));closeSelfie();
+  $('selfieInfo').textContent='Best of 3 camera frames · liveness not checked';
+  info('faceStatus','Selected clearest local frame. Glasses: avoid reflections and face the camera.','ok');
+ }catch(e){info('faceStatus',e.message,'error')}
+ finally{btn.disabled=false}
+}
 async function readPhoto(file,type){if(!file)return;try{if(!file.type.startsWith('image/'))throw Error('Choose a photo');if(file.size>15*1024*1024)throw Error('Photo exceeds 15 MB');
  const image=await readImage(file);const resized=scaledCanvas(image,0,0,image.width,image.height,1500);setPicture(type,resized.toDataURL('image/jpeg',.94),'manual');
  if(type==='ref')$('refInfo').textContent='Manual reference; NOT the Aadhaar QR portrait. Demo only.';
  else $('selfieInfo').textContent='Uploaded picture, not a live image';info('faceStatus','Photo loaded locally.','ok');}
  catch(e){info('faceStatus','Photo error: '+e.message,'error')}}
-function enhancePortrait(img){const w=img.naturalWidth,h=img.naturalHeight;if(Math.min(w,h)>=320)return img;
- const scale=Math.min(5,Math.max(1,Math.ceil(360/Math.min(w,h))));const c=document.createElement('canvas');c.width=w*scale;c.height=h*scale;
- const ctx=c.getContext('2d');ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(img,0,0,c.width,c.height);return c;}
+// Rough image-quality heuristics: not an accuracy probability and not liveness.
+function photoQuality(src){
+ const c=scaledCanvas(src,0,0,src.naturalWidth||src.width,src.naturalHeight||src.height,160);
+ const p=c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,c.width,c.height).data;
+ const w=c.width,h=c.height,g=new Float32Array(w*h);let sum=0,sum2=0;
+ for(let i=0;i<g.length;i++){const k=i*4,v=.299*p[k]+.587*p[k+1]+.114*p[k+2];g[i]=v;sum+=v;sum2+=v*v}
+ const brightness=sum/g.length,contrast=Math.sqrt(Math.max(0,sum2/g.length-brightness*brightness));
+ let lap=0,n=0;
+ for(let y=2;y<h-2;y+=2)for(let x=2;x<w-2;x+=2){const i=y*w+x;const d=4*g[i]-g[i-1]-g[i+1]-g[i-w]-g[i+w];lap+=Math.abs(d);n++}
+ return {brightness,contrast,focusScore:lap/Math.max(1,n),width:src.naturalWidth||src.width,height:src.naturalHeight||src.height};
+}
+function qualityIssues(q){const issues=[];
+ if(q.brightness<65)issues.push('low lighting');if(q.brightness>208)issues.push('very bright image');
+ if(q.contrast<27)issues.push('low contrast');if(q.focusScore<10)issues.push('soft / blurry image');
+ if(Math.min(q.width,q.height)<180)issues.push('small photo');return issues;
+}
+function enhancePortrait(img){
+ const w=img.naturalWidth,h=img.naturalHeight,scale=Math.min(5,Math.max(1,Math.ceil(460/Math.min(w,h))));
+ if(scale<=1)return img;
+ const c=document.createElement('canvas');c.width=w*scale;c.height=h*scale;
+ const ctx=c.getContext('2d');ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';ctx.drawImage(img,0,0,c.width,c.height);return c;
+}
+function normalizeSelfie(src){
+ const w=src.naturalWidth||src.width,h=src.naturalHeight||src.height;
+ const fit=Math.min(3,Math.max(1,500/Math.min(w,h)),1500/Math.max(w,h));
+ const c=document.createElement('canvas');c.width=Math.round(w*fit);c.height=Math.round(h*fit);
+ const ctx=c.getContext('2d',{willReadFrequently:true});ctx.imageSmoothingQuality='high';ctx.drawImage(src,0,0,c.width,c.height);
+ const q=photoQuality(src),p=ctx.getImageData(0,0,c.width,c.height),d=p.data;
+ // Conservative tone correction; cannot recreate occluded eyes or missing face detail.
+ const gamma=q.brightness<95?.78:q.brightness>195?1.12:1;
+ const gain=q.contrast<42?1.14:1.05;
+ for(let i=0;i<d.length;i+=4){for(let j=0;j<3;j++){
+   const base=255*Math.pow(d[i+j]/255,gamma);
+   d[i+j]=clamp(Math.round((base-128)*gain+128),0,255);
+ }}ctx.putImageData(p,0,0);return c;
+}
+function qualityLine(refQ,selfQ){
+ const a=qualityIssues(refQ),b=qualityIssues(selfQ);
+ return `Reference: ${a.join(', ')||'basic checks OK'} · Selfie: ${b.join(', ')||'basic checks OK'}. `+
+ 'Quality checks are indicative, not biometric accuracy or spoof protection.';
+}
 async function faceModels(){if(faceModelPromise)return faceModelPromise;
  faceModelPromise=(async()=>{if(!window.faceapi)throw Error('Face recognition library missing. Check installation above and publish with GitHub Actions.');
  const m=prefs.model==='updated'&&updatedPack()?updatedPack():null;
@@ -188,22 +296,50 @@ function renderDistance(distance){const score=similarityIndex(distance),state=la
  `Current rules: success ≥${prefs.success}%, review ${prefs.review}–${prefs.success-1}%, failure <${prefs.review}%. `+
  (isQR?'Reference originated in the QR; UIDAI signature unchecked.':'Reference was uploaded manually: demo only.')+
  ' No liveness detection.';
- showResult(title,score,description,state==='match'?'success':state==='review'?'review':'fail');}
-async function compare(){if(!qrReady||!ref||!selfie||!$('consent').checked)return info('faceStatus','Scan QR, provide a reference and selfie, and confirm consent.','error');
- $('matchButton').disabled=true;$('matchButton').textContent='Preparing offline face model…';info('faceStatus','Loading local face model. First load can take several seconds, especially on phones.');
- try{await faceModels();await Promise.all([$('refImg').decode(),$('selfieImg').decode()]);$('matchButton').textContent='Comparing facial features…';
- const src=enhancePortrait($('refImg'));
- const detectOptions=prefs.model==='fast'?new faceapi.TinyFaceDetectorOptions({inputSize:608,scoreThreshold:.22}):new faceapi.SsdMobilenetv1Options({minConfidence:.35,maxResults:5});
- // Sequential inference helps limit RAM pressure on older iPhones.
- const a=await faceapi.detectAllFaces(src,detectOptions).withFaceLandmarks(prefs.model==='fast').withFaceDescriptors();
- const b=await faceapi.detectAllFaces($('selfieImg'),detectOptions).withFaceLandmarks(prefs.model==='fast').withFaceDescriptors();
- if(a.length!==1||b.length!==1)throw Error(`Exactly one face required in each photo (found reference ${a.length}, selfie ${b.length}). Improve lighting/angle or recapture.`);
- if(a[0].detection.score<.40||b[0].detection.score<.40)throw Error('One photo has low face detection confidence; use a clearer photo');
- lastDistance=faceapi.euclideanDistance(a[0].descriptor,b[0].descriptor);renderDistance(lastDistance);
- info('faceStatus','Face embeddings compared locally. Spectacles, glare and low-resolution QR photos can affect the score.','ok');}
- catch(e){lastDistance=null;showResult('Comparison unavailable',null,e.message);info('faceStatus',e.message,'error')}
- finally{$('matchButton').textContent='◎ Compare face & show result';refreshControls()}}
-function reset(){++session;stopQr();closeSelfie();qrReady=false;sourceType='';currentSource=null;crop=null;clearPictures();$('sourceWrap').classList.add('hidden');$('detailsBlock').classList.add('hidden');
+ if(matchQualityReview&&state==='match')showResult('REVIEW · IMAGE QUALITY',score,description+' '+matchDiagnostics+' Automatic success withheld due to low image quality.','review');
+ else showResult(title,score,description+' '+matchDiagnostics,state==='match'?'success':state==='review'?'review':'fail');}
+async function detectOne(source,options){
+ const faces=await faceapi.detectAllFaces(source,options).withFaceLandmarks(prefs.model==='fast').withFaceDescriptors();
+ if(faces.length!==1)throw Error(`Expected one face, detected ${faces.length}`);
+ return faces[0];
+}
+let matchDiagnostics='',matchQualityReview=false;
+async function compare(){
+ if(!qrReady||!ref||!selfie||!$('consent').checked)return info('faceStatus','Scan QR, provide a reference and selfie, and confirm consent.','error');
+ $('matchButton').disabled=true;$('matchButton').textContent='Preparing local face model…';info('faceStatus','Preparing local model and checking image quality…');
+ try{
+  await faceModels();await Promise.all([$('refImg').decode(),$('selfieImg').decode()]);
+  const refImg=$('refImg'),selfImg=$('selfieImg');const refQuality=photoQuality(refImg),selfQuality=photoQuality(selfImg);
+  const reference=enhancePortrait(refImg);
+  const opts=prefs.model==='fast'?new faceapi.TinyFaceDetectorOptions({inputSize:608,scoreThreshold:.20}):new faceapi.SsdMobilenetv1Options({minConfidence:.25,maxResults:5});
+  $('matchButton').textContent='Analysing Aadhaar portrait…';
+  const a=await detectOne(reference,opts).catch(e=>{throw Error('Reference photo: '+e.message+'. Try a sharper image or re-scan the QR.');});
+  $('matchButton').textContent='Analysing selfie…';
+  let b=null,d1=null,d2=null,enhanced=null,origError='';
+  try{b=await detectOne(selfImg,opts);d1=faceapi.euclideanDistance(a.descriptor,b.descriptor);}catch(e){origError=e.message;}
+  if($('qualityRescue').checked){
+   info('faceStatus','Running conservative low-light and low-resolution selfie correction…');
+   enhanced=normalizeSelfie(selfImg);
+   try{const c=await detectOne(enhanced,opts);d2=faceapi.euclideanDistance(a.descriptor,c.descriptor);
+    if(!b)b=c;
+   }catch(e){/* The unmodified selfie still works when the enhanced version fails. */}
+  }
+  if(!b||(d1===null&&d2===null))throw Error('Could not locate one face in selfie. '+origError+'. Reduce glasses glare and try retaking.');
+  // Two deterministic embeddings, not best-of-many cherry-picking: average distance
+  // and penalize disagreement. Looser acceptance would increase false accepts.
+  const distance=d1!==null&&d2!==null?(.5*(d1+d2)+.2*Math.abs(d1-d2)):(d1??d2);
+  const disagreement=d1!==null&&d2!==null?Math.abs(d1-d2):0;
+  const lowConfidence=a.detection.score<.4||b.detection.score<.4;
+  const severeQuality=qualityIssues(selfQuality).length>=3||qualityIssues(refQuality).length>=3;
+  const uncertain=lowConfidence||disagreement>.12||severeQuality;matchQualityReview=uncertain;
+  lastDistance=distance;matchDiagnostics=qualityLine(refQuality,selfQuality)+(d1!==null&&d2!==null?` Original/enhanced distances: ${d1.toFixed(3)} / ${d2.toFixed(3)}. `:'')+(disagreement>.12?'Enhancement results disagree. ':'');
+  renderDistance(lastDistance);
+  
+  info('faceStatus',matchDiagnostics+(uncertain?' Review suggested due to image quality.':''),'ok');
+ }catch(e){lastDistance=null;matchDiagnostics='';matchQualityReview=false;showResult('Comparison unavailable',null,e.message);info('faceStatus',e.message,'error')}
+ finally{$('matchButton').textContent='◎ Compare face & show result';refreshControls()}
+}
+function reset(){++activeImageScan;++session;stopQr();closeSelfie();qrReady=false;sourceType='';currentSource=null;crop=null;clearPictures();$('sourceWrap').classList.add('hidden');$('detailsBlock').classList.add('hidden');
  $('identityTag').textContent='Not scanned';$('identityTag').className='tag';for(const id of ['cardFile','qrFile','refFile','selfieFile','qrRaw'])$(id).value='';
  $('consent').checked=false;info('qrStatus','Ready to scan. Offline libraries are served with this app.');info('faceStatus','Step 2 becomes available after QR/demo data is loaded.');refreshControls();}
 // Accuracy display is an adjustable decision aid, NOT biometric probability or measured classification accuracy.
@@ -252,7 +388,8 @@ async function restoreDefault(){const packs=await caches.keys();for(const key of
 // GitHub Pages provisioning diagnostics. Never reads or stores biometric images.
 const HEALTH_ASSETS=[
  ['./asset-manifest.json','Build manifest','build'],
- ['./assets/vendor/jsQR.js','QR decoder','jsqr'],
+ ['./assets/vendor/jsQR.js','QR decoder · jsQR','jsqr'],
+  ['./assets/vendor/zxing.min.js','QR decoder · ZXing','zxing'],
  ['./assets/vendor/openjpeg.js','JPEG 2000 decoder','jpeg2000'],
  ['./assets/vendor/pdf.min.js','PDF decoder','pdf'],
  ['./assets/vendor/face-api.min.js','Face AI code','face'],
@@ -276,9 +413,9 @@ async function probe(path,label,type){
   if(type==='build'){
     const r=await fetch(url.href,{cache:'no-store'});
     const text=await r.text();
-    try{const data=JSON.parse(text);if(data.built!==true||data.version!=='3.0.1'||!Array.isArray(data.files))throw Error('Invalid build manifest');
+    try{const data=JSON.parse(text);if(data.built!==true||data.version!=='3.1.0'||!Array.isArray(data.files))throw Error('Invalid build manifest');
       return {label,type,ok:true,path,size:JSON.stringify(data.files).length};
-    }catch(e){return {label,type,ok:false,why:'Not a v3.0.1 asset build',path};}
+    }catch(e){return {label,type,ok:false,why:'Not a v3.1.0 asset build',path};}
   }
   const length=Number(response.headers.get('content-length'));
   if(ct.includes('text/html'))return {label,type,ok:false,why:'HTML returned instead of asset',path};
@@ -290,7 +427,7 @@ async function probe(path,label,type){
    // An already-cached app remains usable without any network.
    try{
      if('caches' in window){const saved=await caches.match(new URL(path,location.href));
-       if(saved&&saved.ok){if(type==='build'){const d=await saved.clone().json();if(d.built!==true||d.version!=='3.0.1')throw Error('Outdated build manifest')}
+       if(saved&&saved.ok){if(type==='build'){const d=await saved.clone().json();if(d.built!==true||d.version!=='3.1.0')throw Error('Outdated build manifest')}
          return {label,type,ok:true,path,cached:true};}}
    }catch(ignore){}
    return {label,type,ok:false,why:e.message,path};
@@ -302,9 +439,9 @@ async function checkInstallation(){
  try{
   const results=await Promise.all(HEALTH_ASSETS.map(row=>probe(...row)));
   const bad=results.filter(r=>!r.ok);
-  const requiredLoaded=typeof window.jsQR==='function'&&typeof window.openjpeg==='function'&&!!window.pdfjsLib&&!!window.faceapi;
+  const requiredLoaded=typeof window.jsQR==='function'&&!!window.ZXing?.BrowserQRCodeReader&&typeof window.openjpeg==='function'&&!!window.pdfjsLib&&!!window.faceapi;
   const details=results.map(r=>(r.ok?'✓ ':'✗ ')+r.label+' · '+r.path+(r.ok?'':' ('+r.why+')'));
-  if(!requiredLoaded){const miss=[typeof window.jsQR==='function'?null:'jsQR',typeof window.openjpeg==='function'?null:'openjpeg',window.pdfjsLib?null:'pdfjs',window.faceapi?null:'face-api'].filter(Boolean);details.push('Loaded JS globals missing: '+miss.join(', '));}
+  if(!requiredLoaded){const miss=[typeof window.jsQR==='function'?null:'jsQR',window.ZXing?.BrowserQRCodeReader?null:'ZXing',typeof window.openjpeg==='function'?null:'openjpeg',window.pdfjsLib?null:'pdfjs',window.faceapi?null:'face-api'].filter(Boolean);details.push('Loaded JS globals missing: '+miss.join(', '));}
   $('installDetails').textContent=details.join('\n');
   if(bad.length||!requiredLoaded){
     $('installationHealth').className='health bad';$('installHeadline').textContent='Installation incomplete · '+bad.length+' missing / invalid files';
@@ -336,6 +473,7 @@ $('zoomIn').addEventListener('click',()=>{zoom=clamp(zoom*1.3,1,7);drawPreview()
 $('cropMoveMode').addEventListener('click',()=>{moveImage=!moveImage;$('cropMoveMode').textContent='Move image: '+(moveImage?'ON':'OFF');$('sourceCanvas').style.cursor=moveImage?'grab':'crosshair'});
 $('resetView').addEventListener('click',()=>{zoom=1;panX=panY=0;moveImage=false;$('cropMoveMode').textContent='Move image: OFF';drawPreview()});
 $('rotateSource').addEventListener('click',()=>{if(!currentSource)return;const old=currentSource,c=document.createElement('canvas');c.width=old.height;c.height=old.width;const ctx=c.getContext('2d');ctx.translate(c.width,0);ctx.rotate(Math.PI/2);ctx.drawImage(old,0,0);rotate=(rotate+90)%360;previewSource(c)});
+for(const [id,pos] of [['cropBR','br'],['cropBL','bl'],['cropTR','tr'],['cropTL','tl'],['cropCentre','centre']])$(id).addEventListener('click',()=>cropPreset(pos));
 $('clearCrop').addEventListener('click',()=>{crop=null;drawPreview()});$('scanCrop').addEventListener('click',()=>scanCrop(false));$('scanWhole').addEventListener('click',()=>scanCrop(true));
 $('scanQr').addEventListener('click',startQr);$('stopQr').addEventListener('click',stopQr);
 $('cardFile').addEventListener('change',e=>processFile(e.target.files[0]));$('qrFile').addEventListener('change',e=>processFile(e.target.files[0]));

@@ -1,4 +1,4 @@
-# ID Lens v3.0.1 — offline-first Aadhaar QR + face-comparison MVP
+# ID Lens v3.1.0 — offline-first Aadhaar QR + face-comparison MVP
 
 **Build date:** 20 October 2026 (IST).  **Status:** prototype, **not official Aadhaar verification**.
 
@@ -76,11 +76,11 @@ To create a compatible pack from bundled files, produce SHA-256 hashes with `sha
 - Browser preference values and downloaded optional weight files are persisted locally. Use **Clear verification data** to clear on-screen personal fields and images; clearing is not proof of secure erasure from browser memory.
 - This software must not be used as the sole basis to grant/deny services, benefits, employment or access. Obtain consent and comply with relevant Aadhaar / OVSE and privacy obligations before real-world use.
 - Offline functionality depends on the browser Service Worker/cache availability; HTTPS or localhost is required for camera + service worker. Browsers may evict caches.
-- **Dependencies:** face-api.js 0.22.2, jsQR 1.4.0, pdf.js 3.11.174, kripken/j2k.js OpenJPEG and weight shards from justadudewhohacks/face-api.js. Check upstream licenses and vulnerability advisories before any commercial deployment.
+- **Dependencies:** face-api.js 0.22.2, jsQR 1.4.0 + ZXing 0.21.3, pdf.js 3.11.174, kripken/j2k.js OpenJPEG and weight shards from justadudewhohacks/face-api.js. Check upstream licenses and vulnerability advisories before any commercial deployment.
 
 ## Version
 
-`ID Lens v3.0.1`, built 20 October 2026 IST, displayed in the page footer.
+`ID Lens v3.1.0`, built 20 October 2026 · 10:26 PM IST, displayed in the page footer.
 
 ## Fix for “Offline QR reader not yet installed”
 
@@ -92,6 +92,18 @@ The downloadable *source* archive contains no binary JS/model assets; they are f
 4. Open the app and press **Check installation**; it lists every missing JS/weight URL. If an old service worker is serving stale code, press **Clear old app cache & reload**.
 5. For **branch-based Pages**, run `bash scripts/fetch_assets.sh` locally, commit `assets/vendor`, `assets/models`, `asset-manifest.json`, and publish those files. `.gitignore` no longer blocks these assets. Note that cache/offline support and camera require HTTPS (or localhost).
 
-**Failures diagnosed by v3.0.1:** missing JS reader, missing jpeg2000/PDF decoder, missing face-api.js, missing manifests or model shard files, missing build manifest, broken deployment strategy, and stale offline caches. The app does **not** auto-download third-party libraries from CDNs at runtime, preserving its offline-first design.
+**Failures diagnosed by v3.1.0:** missing JS reader, missing jpeg2000/PDF decoder, missing face-api.js, missing manifests or model shard files, missing build manifest, broken deployment strategy, and stale offline caches. The app does **not** auto-download third-party libraries from CDNs at runtime, preserving its offline-first design.
 
 The true runtime model has not been end-to-end benchmarked here with real Aadhaar cards and selfies. This is a prototype with unsigned QR content and no liveness check.
+
+## v3.1.0 — full Aadhaar photo & spectacle/low-quality support
+
+- Full-card uploads automatically scan high-resolution whole image and four corners (two crop sizes), then centre using native BarcodeDetector, jsQR, and locally-bundled ZXing QR reader. Contrast-stretch and binary processing are attempted on candidates. A dense QR that is only a few pixels across each module cannot be recovered; take a closer, sharp photo in that case.
+- The optional crop editor now has bottom/right/top/centre presets, touch resize handles, zoom, and original-resolution scanning.
+- Face comparison supports a default-on *Improve low-quality selfies* checkbox, mild tone correction/upscaling, and two embeddings with a conservative agreement penalty. The success threshold is not secretly changed. Borderline or low-confidence photographs require manual review.
+- Camera capture selects the sharpest of three local frames, which is **not** proof of liveness. Spectacle reflections and covered facial features remain limitations. No identity probability or statistical recognition accuracy can be inferred from the display score.
+- ZXing is downloaded at GitHub build time and self-hosted on GitHub Pages. First load online; then caches allow offline use. Do not deploy only the source branch: deploy with the custom GitHub Actions workflow.
+
+### Validation status
+
+Only synthetic document photos are used in test fixtures; no real Aadhaar card or real-user face-recognition accuracy evaluation was performed. QR digital signatures remain unverified and face comparison is not official authentication.
