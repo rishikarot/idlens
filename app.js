@@ -1,7 +1,7 @@
 /* ID Lens v3.2.0 — browser-local QR + face comparison; not official UIDAI authentication. */
 (()=>{'use strict';
 const $ = id => document.getElementById(id);
-const APP_VERSION = '3.2.1';
+const APP_VERSION = '3.3.0';
 const DEFAULTS={success:80,review:72,model:'enhanced'};
 const CACHE_PREFIX='id-lens-update-';
 let qrStream=null,selfieStream=null,scanTimer=null,qrGeneration=0,session=0;
@@ -9,6 +9,7 @@ let currentSource=null,crop=null,pointer=null,zoom=1,panX=0,panY=0,moveImage=fal
 let ref='',selfie='',sourceType='',qrReady=false,portraitFound=false,faceModelPromise=null,modelLoaded='';
 let lastDistance=null,knownRefSource='none';
 let liveProof=null,liveSeq=0,liveTimer=null,liveState=null,liveModelPromise=null;
+const LIVE_MAX_RETRIES=3;let liveRetriesUsed=0;
 const LIVE_ACTIONS=['blink','turn','pitch','smile','hold'];
 const LIMITS={zip:50000,raw:180000};
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
@@ -220,20 +221,84 @@ function invalidateLiveness(){liveProof=null;liveState=null;liveSeq++;if(liveTim
  if($('liveTitle'))clearLiveUI();}
 function closeSelfie(preserveProof=false){liveSeq++;if(liveTimer)clearTimeout(liveTimer);liveTimer=null;
  if(selfieStream){selfieStream.getTracks().forEach(t=>t.stop());selfieStream=null;}
- $('selfieVideo').srcObject=null;$('selfieStage').classList.add('hidden');$('passportHelp').classList.add('hidden');$('closeSelfie').classList.add('hidden');$('openSelfie').classList.remove('hidden');
- if(!preserveProof){liveProof=null;liveState=null;const img=$('selfieImg');img.removeAttribute('src');img.classList.add('hidden');$('selfieEmpty').classList.remove('hidden');selfie='';lastDistance=null;clearLiveUI();}
+ $('selfieVideo').srcObject=null;$('selfieStage').classList.add('hidden');$('passportHelp').classList.add('hidden');$('liveCoach').classList.add('hidden');coachActions(false);$('closeSelfie').classList.add('hidden');$('openSelfie').classList.remove('hidden');
+ if(!preserveProof){liveRetriesUsed=0;liveProof=null;liveState=null;const img=$('selfieImg');img.removeAttribute('src');img.classList.add('hidden');$('selfieEmpty').classList.remove('hidden');selfie='';lastDistance=null;clearLiveUI();}
  refreshControls();}
 async function livenessModels(){if(!liveModelPromise)liveModelPromise=(async()=>{
  if(!window.faceapi||!window.IDLensMotion)throw Error('Bundled face/landmark code missing. Check installation');
  await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri('./assets/models'),faceapi.nets.faceLandmark68TinyNet.loadFromUri('./assets/models')]);
  })().catch(e=>{liveModelPromise=null;throw e;});return liveModelPromise;}
 const LIVE_LABELS={blink:'Blink once (close → open)',turn:'Turn your head left or right',pitch:'Look up or down',smile:'Smile clearly',hold:'Face forward and hold steady'};
+
+const LIVE_GUIDANCE={
+ blink:['A quick blink, please','Close both eyes for a moment, then open them normally.'],
+ turn:['Turn your head gently','Turn your face a little to the left or right, then keep your face visible in the camera.'],
+ pitch:['Look up or down','Tilt your head slightly up or down. Keep your eyes and face within the oval.'],
+ smile:['Show me a smile','Smile naturally for a moment. Keep your head facing the camera.'],
+ hold:['Great — one final moment','Face forward with your eyes open and keep still for a second.']
+};
+function guide(title,message,kind=''){
+ $('liveCoach').classList.remove('hidden');$('liveCoach').classList.toggle('warn',kind==='warn');
+ $('coachTitle').textContent=title;$('coachMessage').textContent=message;
+ $('retryBadge').textContent=liveRetriesUsed===0?'3 retries available':`${Math.max(0,LIVE_MAX_RETRIES-liveRetriesUsed)} of 3 retries remaining`;
+}
+function coachActions(showRetry=false){
+ $('retryLive').classList.toggle('hidden',!showRetry||liveRetriesUsed>=LIVE_MAX_RETRIES);
+ $('restartLive').classList.toggle('hidden',!showRetry||liveRetriesUsed<LIVE_MAX_RETRIES);
+}
+function explainLiveFailure(reason){
+ if(/Multiple faces/i.test(reason))return 'I can see more than one person. Please move into the frame alone, then try again.';
+ if(/Face lost|confidence|one clear|facial landmarks/i.test(reason))return 'I lost sight of your face. Move back a little, face the camera and keep your forehead and chin visible.';
+ if(/continuous|tracking region|moved out/i.test(reason))return 'The face moved outside the guide. Stay in the oval and make smaller, slower movements.';
+ if(/timed out|Action timed out/i.test(reason))return 'That movement was a little hard to recognize. Try it again slowly, with your face fully visible.';
+ if(/too dark|bright|blurry/i.test(reason))return 'The picture needs a little more light or steadier positioning. Try facing a window, without glare on your glasses.';
+ if(/frozen/i.test(reason))return 'The camera video appears to have paused. Check camera permissions and lighting before you retry.';
+ return 'That check was not clear enough. Adjust your position and try again when ready.';
+}
+function newChallengeAttempt(){
+ if(!selfieStream?.getVideoTracks().some(t=>t.readyState==='live')||!$('consent').checked){closeSelfie(false);info('faceStatus','Please start a new camera session and confirm consent.','error');return;}
+ liveSeq++;if(liveTimer)clearTimeout(liveTimer);liveTimer=null;
+ liveProof=null;selfie='';lastDistance=null;
+ $('selfieImg').removeAttribute('src');$('selfieImg').classList.add('hidden');$('selfieEmpty').classList.remove('hidden');
+ showResult('Not verified',null,'Complete all camera challenges before face matching.');
+ const sequence=liveSeq,v=$('selfieVideo');
+ liveState={phase:'calibrate',started:performance.now(),stepStart:0,lastVideo:v.currentTime-.08,stalled:0,lost:0,frames:0,
+ baseline:null,samples:[],previous:null,ordered:secureShuffleActions(),index:0,actionMemory:{},holdCount:0,done:[],session};
+ clearLiveUI('Getting the camera ready','First, look straight ahead with your eyes open. We will guide you through each movement.');
+ guide('Hello! Let’s line up your face','Stay comfortably in the center of the oval. Keep your forehead and chin in view. This should only take a moment.');
+ coachActions(false);info('faceStatus','Live camera is active. Follow the friendly guide below the video.');
+ refreshControls();liveTimer=setTimeout(()=>stepLive(sequence),200);
+}
+function retryChallenge(){
+ if(!selfieStream||liveState?.phase!=='retry'||liveRetriesUsed>=LIVE_MAX_RETRIES)return;
+ liveRetriesUsed++;
+ newChallengeAttempt();
+}
+function restartChallenge(){
+ if(!selfieStream||liveState?.phase!=='retry'||liveRetriesUsed<LIVE_MAX_RETRIES)return;
+ liveRetriesUsed=0;newChallengeAttempt();
+}
+
 function secureShuffleActions(){const b=new Uint8Array(8);crypto.getRandomValues(b);return [...IDLensMotion.shuffle(['blink','turn','pitch','smile'],b),'hold'];}
 function captureLiveFrame(){const v=$('selfieVideo'),c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;
  if(!c.width||!c.height)throw Error('Camera image unavailable');c.getContext('2d').drawImage(v,0,0);return c;}
-function failLive(reason){info('faceStatus','Liveness NOT passed. '+reason,'error');
- closeSelfie(false);clearLiveUI('Liveness failed — restart required',reason+' Select Start live challenge to retry.');
- showResult('NOT VERIFIED',null,'Live challenge did not complete. No face comparison was performed.','fail');}
+function failLive(reason,stopCamera=false){
+ // A failed step must never produce a biometric proof or leave the compare button enabled.
+ liveSeq++;if(liveTimer)clearTimeout(liveTimer);liveTimer=null;liveProof=null;selfie='';lastDistance=null;
+ $('selfieImg').removeAttribute('src');$('selfieImg').classList.add('hidden');$('selfieEmpty').classList.remove('hidden');
+ if(stopCamera||!selfieStream?.getVideoTracks().some(t=>t.readyState==='live')){
+  closeSelfie(false);info('faceStatus','Camera session ended: '+reason,'error');
+  showResult('NOT VERIFIED',null,'Camera session ended; restart to verify.','fail');return;
+ }
+ liveState={phase:'retry'};
+ const exhausted=liveRetriesUsed>=LIVE_MAX_RETRIES;
+ clearLiveUI(exhausted?'Challenge paused · 3 retries used':'Challenge paused · camera still on',reason);
+ guide(exhausted?'Let’s start a fresh check':'Almost there — let’s try again',explainLiveFailure(reason)+(exhausted?' Select Start new challenge to reset all five actions.':' You can retry without reopening the camera.'),'warn');
+ coachActions(true);
+ info('faceStatus','No match performed. Camera stays open; follow the guide below it.','error');
+ showResult('NOT VERIFIED',null,'The liveness sequence was incomplete. Retry before matching.','review');
+ refreshControls();
+}
 async function openSelfie(){if(!qrReady||!portraitFound||knownRefSource!=='qr')return info('faceStatus','Read the QR and extract its embedded photograph first. Demo or manually supplied photos cannot verify.','error');
  if(!$('consent').checked)return info('faceStatus','Please confirm consent before enabling your camera.','error');
  closeSelfie(false);stopQr();const sequence=++liveSeq;
@@ -243,13 +308,10 @@ async function openSelfie(){if(!qrReady||!portraitFound||knownRefSource!=='qr')r
   if(sequence!==liveSeq){selfieStream?.getTracks().forEach(x=>x.stop());return;}
   $('selfieVideo').srcObject=selfieStream;await $('selfieVideo').play();
   $('selfieStage').classList.remove('hidden');$('passportHelp').classList.remove('hidden');$('closeSelfie').classList.remove('hidden');$('openSelfie').classList.add('hidden');
+  $('selfieStage').scrollIntoView({behavior:'smooth',block:'start'});
   await livenessModels();if(sequence!==liveSeq)return;
-  liveState={phase:'calibrate',started:performance.now(),stepStart:0,lastVideo:-1,stalled:0,lost:0,frames:0,
-   baseline:null,samples:[],previous:null,ordered:secureShuffleActions(),index:0,actionMemory:{},holdCount:0,done:[],session};
-  $('liveTitle').textContent='Calibrating your neutral face';
-  info('liveInstruction','Face camera straight-on, eyes open and mouth relaxed. Keep your full face inside the passport-style frame.');
-  info('faceStatus','Camera-only check active. Follow prompts shown below. All frames processed locally.');
-  liveTimer=setTimeout(()=>stepLive(sequence),130);
+  liveRetriesUsed=0;
+  newChallengeAttempt();
  }catch(e){if(sequence!==liveSeq)return;failLive(e.message);}
 }
 async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveState)return;const st=liveState,video=$('selfieVideo');
@@ -266,16 +328,23 @@ async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveSta
     const opts=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.33});
     const detections=await faceapi.detectAllFaces(video,opts).withFaceLandmarks(true);
     if(sequence!==liveSeq||!selfieStream)return;
-    if(detections.length!==1){if(detections.length>1)throw Error('Multiple faces detected — restart required');if(++st.lost>3)throw Error('Face lost; remain in camera view');}
+    if(detections.length!==1){if(detections.length>1)throw Error('Multiple faces detected — restart required');if(++st.lost>8)throw Error('Face lost; remain in camera view');}
     else{
      const m=IDLensMotion.metrics(detections[0],video.videoWidth,video.videoHeight);st.frames++;
-     if(m.confidence<.35){if(++st.lost>4)throw Error('Face detection confidence too low');}
+     if(m.confidence<.35){if(++st.lost>8)throw Error('Face detection confidence too low');}
      else if(!IDLensMotion.continuous(st.previous,m))throw Error('Continuous face tracking interrupted');
      else{
       st.lost=0;st.previous=m;
       if(st.phase==='calibrate'){
-       if(m.ear>.16&&m.size>.17&&m.size<.8&&Math.abs(m.x-.5)<.28&&Math.abs(m.y-.5)<.30)st.samples.push(m);
-       else st.samples=[];
+       const goodPosition=m.ear>.16&&m.size>.17&&m.size<.8&&Math.abs(m.x-.5)<.28&&Math.abs(m.y-.5)<.30;
+       if(goodPosition){st.samples.push(m);if(st.alignCue!=='ready'){st.alignCue='ready';guide('That’s it — hold still','Perfect! Keep looking at the camera with your eyes open while I get ready.')}}
+       else{st.samples=[];
+        let cue='center',message='Move your face toward the centre of the oval.';
+        if(m.size<=.17){cue='closer';message='Come a little closer so I can see your features clearly.';}
+        else if(m.size>=.8){cue='farther';message='Move slightly farther from the camera so your forehead and chin fit.';}
+        else if(m.ear<=.16){cue='eyes';message='Look straight at the camera and keep both eyes open for a moment.';}
+        if(cue!==st.alignCue){st.alignCue=cue;guide('A tiny adjustment, please',message);}
+       }
        $('liveTitle').textContent='Calibrating neutral face ('+Math.min(7,st.samples.length)+'/7)';
        if(st.samples.length>=7){st.baseline=IDLensMotion.mean(st.samples);st.phase='challenge';st.stepStart=now;st.samples=[];displayAction(st);}
       }else if(st.phase==='challenge'){
@@ -297,6 +366,7 @@ async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveSta
 function displayAction(st){const act=st.ordered[st.index];$('liveTitle').textContent='Action '+(st.index+1)+' / 5 · '+LIVE_LABELS[act];
  $('liveStep').textContent=(st.index)+' / 5';$('liveBar').style.width=st.index*20+'%';
  info('liveInstruction',LIVE_LABELS[act]+'. You have 12 seconds. Keep your face in view.');
+ const prompt=LIVE_GUIDANCE[act];guide(prompt[0],prompt[1]+` Step ${st.index+1} of 5 — take your time.`);coachActions(false);
  const rows=$('liveChecklist').children;
  for(let i=0;i<rows.length;i++){const key=['blink','turn','pitch','smile','hold'][i];const done=st.done.includes(key);rows[i].classList.toggle('ok',done);rows[i].textContent=(done?'✓ ':'○ ')+({blink:'Blink',turn:'Turn left/right',pitch:'Look up/down',smile:'Smile',hold:'Face stability'})[key];}}
 async function finishLive(st,sequence){if(sequence!==liveSeq||!selfieStream)return;
@@ -560,14 +630,14 @@ $('scanQr').addEventListener('click',startQr);$('stopQr').addEventListener('clic
 $('cardFile').addEventListener('change',e=>processFile(e.target.files[0]));$('qrFile').addEventListener('change',e=>processFile(e.target.files[0]));
 $('decodeRaw').addEventListener('click',()=>decodeNumeric($('qrRaw').value));
 $('demo').addEventListener('click',()=>{++session;finishIdentity({name:'Demo Resident (Synthetic)',last4:'4321',dob:'01-01-1992',gender:'F',house:'Example House',street:'Sample Road',vtc:'Kochi',district:'Ernakulam',state:'Kerala',pincode:'682001'},true)});
-$('openSelfie').addEventListener('click',openSelfie);$('closeSelfie').addEventListener('click',()=>closeSelfie(false));
+$('openSelfie').addEventListener('click',openSelfie);$('closeSelfie').addEventListener('click',()=>closeSelfie(false));$('retryLive').addEventListener('click',retryChallenge);$('restartLive').addEventListener('click',restartChallenge);
 $('consent').addEventListener('change',()=>{if(!$('consent').checked)closeSelfie(false);refreshControls()});$('matchButton').addEventListener('click',compare);$('resetAll').addEventListener('click',reset);
 $('successThreshold').addEventListener('input',e=>{prefs.success=+e.target.value;if(prefs.review>=prefs.success)prefs.review=prefs.success-1;syncThresholdUI()});
 $('reviewThreshold').addEventListener('input',e=>{prefs.review=+e.target.value;if(prefs.review>=prefs.success)prefs.success=prefs.review+1;syncThresholdUI()});
 $('balancedPreset').addEventListener('click',()=>setPreset(80,72));$('strictPreset').addEventListener('click',()=>setPreset(85,78));$('lenientPreset').addEventListener('click',()=>setPreset(75,68));
 $('modelChoice').addEventListener('change',e=>{const m=e.target.value;if(m==='updated'&&!updatedPack()){activeModelStatus();return;}if(m===prefs.model)return;prefs.model=m;saved();info('modelManagerStatus','Model selection saved. Reloading to load the selected local model…','ok');setTimeout(()=>location.reload(),650)});
 $('installModel').addEventListener('click',installUpdate);$('checkUpdate').addEventListener('click',checkUpdateChannel);$('restoreModel').addEventListener('click',restoreDefault);
-window.addEventListener('pagehide',()=>{stopQr();closeSelfie(false)});document.addEventListener('visibilitychange',()=>{if(document.hidden&&selfieStream)failLive('Verification interrupted when browser became hidden')});window.addEventListener('resize',()=>{if(currentSource)sizeCropElement()});
+window.addEventListener('pagehide',()=>{stopQr();closeSelfie(false)});document.addEventListener('visibilitychange',()=>{if(document.hidden&&selfieStream)failLive('Verification interrupted when browser became hidden',true)});window.addEventListener('resize',()=>{if(currentSource)sizeCropElement()});
 async function initSW(){if(!('serviceWorker' in navigator)||!location.protocol.startsWith('http'))return;
  try{await navigator.serviceWorker.register('./sw.js',{scope:'./'});const reg=await navigator.serviceWorker.ready;
  if(reg&&navigator.serviceWorker.controller){$('modelManagerStatus').textContent='Default models load locally; offline cache is active. Optional updates require a compatible manifest.'}

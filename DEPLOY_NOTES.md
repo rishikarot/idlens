@@ -1,3 +1,11 @@
+# v3.3.0 release instructions
+
+Upload `index.html`, `app.js`, and `sw.js` to the root of `rishikarot/idlens` on `main`, replacing the previous versions. Keep all other files and the existing `.github/workflows/deploy.yml` unchanged. Allow the existing `Publish ID Lens (offline assets)` GitHub Action to deploy; then clear the old application cache and reload.
+
+The previous v3.2.0 deployment must already include `liveness-core.js` in the published site. This v3.3.0 UI release does not add new model assets.
+
+Tests: `node --check app.js`; `node tests/liveness.test.cjs`. Real front-camera and spoofing validation still require on-device testing.
+
 # Updating https://rishikarot.github.io/idlens/
 
 1. Extract `ID_Lens_v3_2_0_GitHub_Ready.zip` to the repository root. Do not upload the ZIP file itself as the website.

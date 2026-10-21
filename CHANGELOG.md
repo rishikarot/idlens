@@ -1,3 +1,13 @@
+## 3.3.0 — 21 October 2026
+
+- Larger uncropped passport-style portrait camera preview; responsive across mobile and desktop.
+- Friendly conversational liveness coach immediately below video with tailored per-action instructions and live move-closer/move-back guidance.
+- Automatically scrolls the active camera into view on mobile.
+- Face detection/calibration/action timeouts pause instead of closing the camera. Up to three in-camera retries, restarting all randomized actions and resetting proof.
+- After all retries, explicit new challenge is available; browser-background, permission loss and camera-stop conditions still close the stream.
+- One-face continuity and mandatory QR photograph guards remain intact. Match cannot proceed on any failed attempt.
+- Service worker cache version bumped to publish the interface update.
+
 # ID Lens v3.2.0 — 21 Oct 2026 IST
 
 - Added live front-camera motion-challenge engine with a neutral-face calibration period.
