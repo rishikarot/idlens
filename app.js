@@ -1,7 +1,7 @@
 /* ID Lens v3.2.0 — browser-local QR + face comparison; not official UIDAI authentication. */
 (()=>{'use strict';
 const $ = id => document.getElementById(id);
-const APP_VERSION = '3.2.0';
+const APP_VERSION = '3.2.1';
 const DEFAULTS={success:80,review:72,model:'enhanced'};
 const CACHE_PREFIX='id-lens-update-';
 let qrStream=null,selfieStream=null,scanTimer=null,qrGeneration=0,session=0;
@@ -220,7 +220,7 @@ function invalidateLiveness(){liveProof=null;liveState=null;liveSeq++;if(liveTim
  if($('liveTitle'))clearLiveUI();}
 function closeSelfie(preserveProof=false){liveSeq++;if(liveTimer)clearTimeout(liveTimer);liveTimer=null;
  if(selfieStream){selfieStream.getTracks().forEach(t=>t.stop());selfieStream=null;}
- $('selfieVideo').srcObject=null;$('selfieVideo').classList.add('hidden');$('closeSelfie').classList.add('hidden');$('openSelfie').classList.remove('hidden');
+ $('selfieVideo').srcObject=null;$('selfieStage').classList.add('hidden');$('passportHelp').classList.add('hidden');$('closeSelfie').classList.add('hidden');$('openSelfie').classList.remove('hidden');
  if(!preserveProof){liveProof=null;liveState=null;const img=$('selfieImg');img.removeAttribute('src');img.classList.add('hidden');$('selfieEmpty').classList.remove('hidden');selfie='';lastDistance=null;clearLiveUI();}
  refreshControls();}
 async function livenessModels(){if(!liveModelPromise)liveModelPromise=(async()=>{
@@ -239,15 +239,15 @@ async function openSelfie(){if(!qrReady||!portraitFound||knownRefSource!=='qr')r
  closeSelfie(false);stopQr();const sequence=++liveSeq;
  try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Front camera unavailable (HTTPS required)');
   info('faceStatus','Starting front camera and loading offline landmark detector…');
-  selfieStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'user'},width:{ideal:960},height:{ideal:720},frameRate:{ideal:20}},audio:false});
+  selfieStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'user'},aspectRatio:{ideal:0.78},width:{ideal:720},height:{ideal:960},frameRate:{ideal:20}},audio:false});
   if(sequence!==liveSeq){selfieStream?.getTracks().forEach(x=>x.stop());return;}
   $('selfieVideo').srcObject=selfieStream;await $('selfieVideo').play();
-  $('selfieVideo').classList.remove('hidden');$('closeSelfie').classList.remove('hidden');$('openSelfie').classList.add('hidden');
+  $('selfieStage').classList.remove('hidden');$('passportHelp').classList.remove('hidden');$('closeSelfie').classList.remove('hidden');$('openSelfie').classList.add('hidden');
   await livenessModels();if(sequence!==liveSeq)return;
   liveState={phase:'calibrate',started:performance.now(),stepStart:0,lastVideo:-1,stalled:0,lost:0,frames:0,
    baseline:null,samples:[],previous:null,ordered:secureShuffleActions(),index:0,actionMemory:{},holdCount:0,done:[],session};
   $('liveTitle').textContent='Calibrating your neutral face';
-  info('liveInstruction','Face camera straight-on, eyes open and mouth relaxed. Keep one face within the frame.');
+  info('liveInstruction','Face camera straight-on, eyes open and mouth relaxed. Keep your full face inside the passport-style frame.');
   info('faceStatus','Camera-only check active. Follow prompts shown below. All frames processed locally.');
   liveTimer=setTimeout(()=>stepLive(sequence),130);
  }catch(e){if(sequence!==liveSeq)return;failLive(e.message);}
