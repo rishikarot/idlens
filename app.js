@@ -1,7 +1,7 @@
 /* ID Lens v3.2.0 — browser-local QR + face comparison; not official UIDAI authentication. */
 (()=>{'use strict';
 const $ = id => document.getElementById(id);
-const APP_VERSION = '3.4.0';
+const APP_VERSION = '3.4.1';
 const DEFAULTS={success:80,review:72,model:'enhanced'};
 const CACHE_PREFIX='id-lens-update-';
 let qrStream=null,selfieStream=null,scanTimer=null,qrGeneration=0,session=0;
@@ -628,9 +628,9 @@ async function probe(path,label,type){
   if(type==='build'){
     const r=await fetch(url.href,{cache:'no-store'});
     const text=await r.text();
-    try{const data=JSON.parse(text);if(data.built!==true||data.version!=='3.2.0'||!Array.isArray(data.files))throw Error('Invalid build manifest');
+    try{const data=JSON.parse(text);if(data.built!==true||data.version!==APP_VERSION||!Array.isArray(data.files))throw Error('Invalid build manifest');
       return {label,type,ok:true,path,size:JSON.stringify(data.files).length};
-    }catch(e){return {label,type,ok:false,why:'Not a v3.4.0 asset build',path};}
+    }catch(e){return {label,type,ok:false,why:'Build manifest missing, corrupt, or not v'+APP_VERSION,path};}
   }
   const length=Number(response.headers.get('content-length'));
   if(ct.includes('text/html'))return {label,type,ok:false,why:'HTML returned instead of asset',path};

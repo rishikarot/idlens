@@ -27,6 +27,6 @@ for fname,minsize in [(f'assets/vendor/{n}',v) for n,v in vendors.items()]+[(f'a
     if len(data)<minsize:sys.exit(f'ERROR: Invalid or undersized asset {fname}: {len(data)} bytes')
     if data[:100].lstrip().startswith((b'<!doctype',b'<html',b'<Error')):sys.exit(f'ERROR: HTML/XML placeholder downloaded instead of binary: {fname}')
     rows.append({'path':fname,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()})
-manifest={'built':True,'version':'3.4.0','files':rows}
+manifest={'built':True,'version':'3.4.1','files':rows}
 (root/'asset-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print('VERIFIED:',len(rows),'asset files,',round(sum(r['bytes'] for r in rows)/1e6,2),'MB; built asset-manifest.json')

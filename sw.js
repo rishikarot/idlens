@@ -1,5 +1,5 @@
 /* ID Lens v3: same-origin cache only. No personal data, images or QR payloads are cached. */
-const VERSION='idlens-v3.4.0-static';
+const VERSION='idlens-v3.4.1-static';
 const STATIC=['./','./index.html','./app.js','./liveness-core.js','./blink-core.js','./sw.js','./manifest.webmanifest','./updates/channel.json',
  './asset-manifest.json','./assets/vendor/face-api.min.js','./assets/vendor/jsQR.js','./assets/vendor/zxing.min.js','./assets/vendor/mediapipe/vision_bundle.mjs','./assets/vendor/mediapipe/wasm/vision_wasm_internal.js','./assets/vendor/mediapipe/wasm/vision_wasm_internal.wasm','./assets/vendor/mediapipe/wasm/vision_wasm_nosimd_internal.js','./assets/vendor/mediapipe/wasm/vision_wasm_nosimd_internal.wasm','./assets/models/face_landmarker.task','./assets/vendor/openjpeg.js','./assets/vendor/pdf.min.js',
  './assets/models/ssd_mobilenetv1_model-weights_manifest.json','./assets/models/ssd_mobilenetv1_model-shard1','./assets/models/ssd_mobilenetv1_model-shard2',
