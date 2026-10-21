@@ -1,109 +1,72 @@
-# ID Lens v3.1.0 — offline-first Aadhaar QR + face-comparison MVP
+# ID Lens v3.2.0 — offline-first QR → live motion challenges → face match
 
-**Build date:** 20 October 2026 (IST).  **Status:** prototype, **not official Aadhaar verification**.
+**Released:** 21 October 2026 (IST). **Purpose:** research / MVP, NOT UIDAI authentication or certified presentation-attack detection.
 
-## Deploy to GitHub Pages
+## What changed
 
-1. Create a repository, unpack all contents into its root, **including the hidden `.github` directory**, and push to `main` or `master`.
-2. In GitHub repo **Settings → Pages → Build and deployment**, choose **GitHub Actions**.
-3. The `Publish ID Lens (offline assets)` workflow downloads pinned JS libraries and face-api model weights as a **build step**, bundles them in the generated Pages artifact and publishes them under your own GitHub Pages origin.
-4. When the workflow completes, open the Pages URL using HTTPS. The page will show an **Installation health** panel. It reads `asset-manifest.json` produced by the build. All checks must pass. The first visit loads the locally hosted assets and starts a service worker that caches them for later offline use. The first visit still requires connectivity. Later visits can work without an internet connection as long as the browser has not evicted the cache.
-5. In Safari/Chrome, allow the camera when prompted. If permissions are unavailable, use the upload options.
+- A document photo/PDF or camera can still be used to **scan the Aadhaar QR**, with high-resolution region scanning and optional crop/zoom/rotate.
+- An embedded **QR portrait is mandatory** for verification. Manually uploaded reference images are no longer accepted.
+- **No selfie photo upload and no stored video upload** exist in the verification UI.
+- Only a new front-camera `getUserMedia()` session with the user's consent can produce the selfie for face comparison.
+- Five checks in each live session: **blink, turn left/right, look up/down, smile, and final face-forward stability**. The first four are shuffled on each attempt.
+- A neutral face baseline is gathered first; action thresholds use face-landmark **ratios** rather than pretending to measure exact degrees.
+- The camera stream must advance; one face must remain tracked. Multiple faces, missing face over consecutive frames, a paused/hidden browser, timed-out instructions, or camera interruption fail the attempt.
+- A passing selfie is generated from the uninterrupted camera stream in memory. Its one-session proof expires after 60 seconds; changing identity, withdrawing consent, or restarting the camera invalidates it.
+- Low-light/low-resolution correction and existing locally hosted recognition model and adjustable similarity thresholds are retained. Face matching still happens locally.
+- In-page diagnostics now include the new `liveness-core.js` and tiny face/landmark weights. The GitHub Actions workflow runs tests and publishes it with the app.
 
-**Why the distributable is a source ZIP, not one HTML file:**  Real neural-network weights are several MB of binary data and must be served alongside `index.html`. They are **not embedded in the HTML**, nor fetched from public CDNs by end-user browsers. This ZIP ships the app and a reproducible GitHub Actions dependency-bundling step; models are not included as bytes until that step finishes. If you need a physically complete air-gapped ZIP, run `bash scripts/fetch_assets.sh` with internet on your developer machine, then zip the populated folder; thereafter serving and face comparison need no outside network.
+## GitHub Pages deployment
 
-## Local testing
+1. Upload this package's **contents** to `rishikarot/idlens` on the `main` branch. Preserve `.github/workflows/deploy.yml` and `liveness-core.js` at the repository root. For updating the previous version, use the **changed-files ZIP**, which preserves existing documents/assets and workflow configuration.
+2. In repository **Settings → Pages**, use **Source: GitHub Actions** (not branch-based Pages), to avoid another build overwriting the bundled models.
+3. Wait for **Publish ID Lens (offline assets)** to complete successfully. It executes the pure Node.js motion tests, downloads pinned models and QR decoders, checks weights and publishes a complete artifact.
+4. Open `https://rishikarot.github.io/idlens/` and select **Clear old app cache & reload**. Next choose **Check installation** to verify local dependencies, including the liveness engine.
+5. Test a real Aadhaar QR *only with the person's consent*. Confirm its **embedded portrait** is extracted. Check consent, tap **Start live challenge** and follow prompts, then **Verify live face against Aadhaar QR** within 60 seconds.
+
+### Offline behavior
+
+The source archive does **not** contain large binary JS/model weights. CI downloads and deploys them during the GitHub Action, from pinned third-party URLs. The user's browser then downloads from the same GitHub Pages origin and caches them for use when offline. The **first visit requires internet**, and a browser may subsequently evict the cache. Verification uses no third-party biometric API. A standalone air-gapped distribution must include previously downloaded `assets/vendor/`, `assets/models/` and generated `asset-manifest.json` as well as source files. See `scripts/fetch_assets.sh`.
+
+## Action logic (heuristic, not calibrated)
+
+| Action | Observed facial cue | MVP rule |
+|---|---|---|
+| Blink | Eye aspect ratio (EAR) | Closed then reopened relative to personal neutral baseline within 1.9 sec |
+| Turn | Nose-to-eye horizontal position | Normalized yaw proxy differs by more than 0.23 from neutral |
+| Look up/down | Nose-to-eye vertical proportion | Normalized pitch proxy differs by more than 0.075 from neutral |
+| Smile | Lip-corner horizontal spread | Spread exceeds neutral by >0.10 eye-width units (or a combined spread/corner cue) |
+| Stability | Single face count, landmark box position and size, video time | Continuous one-face track, no frame freeze, final centered/open-eyed hold across 4 observations |
+
+Head-pose proxies are **not degrees**: claims such as 15–20° should NOT be inferred from this implementation. Thresholds will require per-device and demographic validation. Glasses reflections and low-resolution cameras can impair landmark tracking; the app refuses verification if reliable eye signals cannot be obtained.
+
+## Accuracy and models
+
+- **Face matching** uses face-api.js 0.22.2's SSD MobileNet v1 detector, 68-point landmarks and 128D embedding model (default), or the fast tiny face pipeline.
+- **Liveness** uses a different small detection stack: bundled TinyFaceDetector and tiny 68-point landmarks to process consecutive video frames. It is not a learned anti-spoofing classifier.
+- The displayed face score remains a made-up **similarity index**, `clamp(round((1.30 - EuclideanDistance) × 100), 0, 100)`. It is **not a probability or a measured accuracy rate**.
+- Custom match thresholds and model-update/rollback controls remain available, but they **do not disable liveness**.
+- The final live frame may receive conservative local contrast normalization. It cannot reconstruct eye information obscured by spectacles or rescue irretrievably blurry photos.
+
+## Security / privacy limits
+
+**This version does not and cannot guarantee rejection of every saved-video replay, virtual camera injection, sophisticated face swap or real-time deepfake.** Removing file uploads prevents the obvious photo-to-photo UI bypass, and randomized prompts help against unresponsive printed-photo or ordinary playback attacks. A prerecorded video presented to the *physical camera* or a malicious software camera may still succeed if sufficiently adaptive. Browser JavaScript can also be altered by a motivated attacker. High-assurance verification needs independently evaluated PAD/liveness technology, trusted camera/capture boundaries, replay-resistant challenge verification, signed UIDAI QR verification and external validation with actual spoof media.
+
+- QR payload **digital signature is NOT checked**, so QR demographics and portrait provenance are NOT authenticated.
+- `Live challenge passed` means only these browser heuristics passed. `FACE MATCH · SUCCESS` is a **prototype comparison**, not official Aadhaar authentication.
+- Never use the MVP alone to grant or deny employment, benefits, financial access or other significant services.
+- Obtain explicit consent and check UIDAI/offline-verification and privacy requirements before a production product.
+- Aadhaar images and camera frames are not sent to an application backend. The app uses in-memory image buffers; browser preferences and optional AI weight updates are saved locally. Avoid committing real Aadhaar media to a public GitHub repository.
+
+## Test commands
 
 ```bash
-bash scripts/fetch_assets.sh  # Run once on a machine with internet
+node tests/liveness.test.cjs
+bash scripts/fetch_assets.sh  # internet, on a development machine; fetches 17 runtime assets
 python3 -m http.server 8000
-# visit http://localhost:8000
 ```
 
-## Main workflow
+Open `http://localhost:8000`, or deploy to a HTTPS site for `getUserMedia` on iPhone. The pure Node tests validate state-independent landmark decision functions but **do not substitute for a real-camera acceptance test**.
 
-1. Scan Aadhaar Secure QR via rear camera or upload a high-resolution card photo/QR image/PDF. For a safe offline test, upload `samples/synthetic_qr.png` (generated sample data, **not an Aadhaar credential**). If automatic QR recognition fails, drag to select the QR in the **optional crop editor**, resize with corner handles, move the selection, zoom/pan and inspect the true source-pixel crop preview before **Scan selected area**.
-2. Review details extracted from QR, including masked last four digits, name, date of birth, gender, address. QR photo extraction uses the locally hosted OpenJPEG (JPEG 2000) decoder and may still fail for unusual QR variants.
-3. Take selfie with front camera, or upload a selfie with consent; compare to QR portrait using the **locally hosted** face-api.js model weights.
-4. View the *similarity index* and Euclidean distance, with success/review/failure based on the current adjustable thresholds. Without a QR-extracted portrait, a manually uploaded reference is clearly marked **photo test only**.
+## Release identification
 
-## Face model and accuracy
-
-- **Enhanced (default):** face-api.js 0.22.2, SSD MobileNet v1 face detection + full 68-point landmarks + ResNet-34-like 128-D face recognition.
-- **Fast:** tiny face detection + tiny 68-point landmarks + the same recognition network; faster on modest phones, lower small-face detection performance.
-- **Default thresholds:** success: similarity index 80% or higher (`distance ≤ 0.50`), review: 72–79% (`distance ≤ 0.58`); below 72%: failure. **These are DEMO decision rules, not statistically calibrated biometric accuracy.**
-- **Display equation:** `similarityIndex = clamp(round((1.30 - EuclideanDistance) * 100), 0, 100)`. `80%` on screen does **not** mean 80% chance of the same person.
-- **Custom threshold sliders** and presets are saved in browser localStorage and can be restored with **Default**. The last result is reclassified live without re-running recognition.
-- Wearing spectacles, reflections, pose, poor lighting and the QR portrait's small resolution can affect the result. High recognition accuracy for actual Aadhaar images is **not validated**.
-
-## Optional compatible model updates and rollback
-
-This app accepts **face-api.js v0.22.2-compatible enhanced models only**, not arbitrary ONNX or other model architectures.
-
-1. Host an update pack at an HTTPS URL with a top-level manifest. This file must contain `engine: "face-api.js@0.22.2"`, `id`, `version` and a `files` array. Files each require a unique `name`, a full HTTPS or relative `url`, and a lowercase SHA-256 checksum (`sha256`).
-2. Every referenced model manifest and shard is downloaded **only after clicking Download & install update**, hash-verified and saved in the user's **CacheStorage**, without uploading personal data.
-3. The app switches to that model after reloading. The service worker intercepts the local `/model-updates/pack-id/...` paths to serve the newly cached weights.
-4. **Restore default model** clears installed optional model packs and switches back to bundled enhanced models. Thresholds can be reset independently by clicking **Default**.
-5. To publish a compatible update announcement, set `updates/channel.json`'s `latest` property to its HTTPS pack manifest URL; users must still explicitly download it.
-
-Example pack format:
-
-```json
-{
-  "id": "enhanced-2026-10",
-  "version": "Enhanced weights 2026-10",
-  "engine": "face-api.js@0.22.2",
-  "files": [
-    {"name": "ssd_mobilenetv1_model-weights_manifest.json", "url": "ssd_mobilenetv1_model-weights_manifest.json", "sha256": "<64 lowercase hex>"},
-    {"name": "ssd_mobilenetv1_model-shard1", "url": "ssd_mobilenetv1_model-shard1", "sha256": "<64 lowercase hex>"},
-    {"name": "ssd_mobilenetv1_model-shard2", "url": "ssd_mobilenetv1_model-shard2", "sha256": "<64 lowercase hex>"},
-    {"name": "face_landmark_68_model-weights_manifest.json", "url": "face_landmark_68_model-weights_manifest.json", "sha256": "<64 lowercase hex>"},
-    {"name": "face_landmark_68_model-shard1", "url": "face_landmark_68_model-shard1", "sha256": "<64 lowercase hex>"},
-    {"name": "face_recognition_model-weights_manifest.json", "url": "face_recognition_model-weights_manifest.json", "sha256": "<64 lowercase hex>"},
-    {"name": "face_recognition_model-shard1", "url": "face_recognition_model-shard1", "sha256": "<64 lowercase hex>"},
-    {"name": "face_recognition_model-shard2", "url": "face_recognition_model-shard2", "sha256": "<64 lowercase hex>"}
-  ]
-}
-```
-
-To create a compatible pack from bundled files, produce SHA-256 hashes with `shasum -a 256 assets/models/*`. **An update must remain compatible with face-api.js 0.22.2.** Treat remote update packs as trusted input; malicious weight files may cause denial of service even with checksum validation.
-
-## Privacy and limitations
-
-- Aadhaar QR **digital signature is not verified** in this prototype. Data may have been tampered with; do not treat it as authenticated identity.
-- Face match is NOT official UIDAI biometric face authentication. No liveness test, replay defense or calibrated FAR/FRR.
-- The reference image and selfie stay in volatile browser memory; never put them in `localStorage`, IndexedDB or CacheStorage.
-- Browser preference values and downloaded optional weight files are persisted locally. Use **Clear verification data** to clear on-screen personal fields and images; clearing is not proof of secure erasure from browser memory.
-- This software must not be used as the sole basis to grant/deny services, benefits, employment or access. Obtain consent and comply with relevant Aadhaar / OVSE and privacy obligations before real-world use.
-- Offline functionality depends on the browser Service Worker/cache availability; HTTPS or localhost is required for camera + service worker. Browsers may evict caches.
-- **Dependencies:** face-api.js 0.22.2, jsQR 1.4.0 + ZXing 0.21.3, pdf.js 3.11.174, kripken/j2k.js OpenJPEG and weight shards from justadudewhohacks/face-api.js. Check upstream licenses and vulnerability advisories before any commercial deployment.
-
-## Version
-
-`ID Lens v3.1.0`, built 20 October 2026 · 10:26 PM IST, displayed in the page footer.
-
-## Fix for “Offline QR reader not yet installed”
-
-The downloadable *source* archive contains no binary JS/model assets; they are fetched during the GitHub Actions build. If Pages is configured to publish directly from a branch, `assets/vendor/jsQR.js` returns HTTP 404, so the original v3.0.0 reports “Offline QR Reader not yet installed”.
-
-1. GitHub → **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-2. **Actions** → **Publish ID Lens (offline assets)** → **Run workflow**. Wait until both `build` and `deploy` are successful. Ensure `.github/workflows/deploy.yml` is present in the repo, especially when uploading via browser.
-3. Check `https://<your-pages-url>/asset-manifest.json`: it should contain `"built": true`, `"version": "3.0.1"`. Next visit `<your-pages-url>/assets/vendor/jsQR.js` — it should return JavaScript, not a 404 page.
-4. Open the app and press **Check installation**; it lists every missing JS/weight URL. If an old service worker is serving stale code, press **Clear old app cache & reload**.
-5. For **branch-based Pages**, run `bash scripts/fetch_assets.sh` locally, commit `assets/vendor`, `assets/models`, `asset-manifest.json`, and publish those files. `.gitignore` no longer blocks these assets. Note that cache/offline support and camera require HTTPS (or localhost).
-
-**Failures diagnosed by v3.1.0:** missing JS reader, missing jpeg2000/PDF decoder, missing face-api.js, missing manifests or model shard files, missing build manifest, broken deployment strategy, and stale offline caches. The app does **not** auto-download third-party libraries from CDNs at runtime, preserving its offline-first design.
-
-The true runtime model has not been end-to-end benchmarked here with real Aadhaar cards and selfies. This is a prototype with unsigned QR content and no liveness check.
-
-## v3.1.0 — full Aadhaar photo & spectacle/low-quality support
-
-- Full-card uploads automatically scan high-resolution whole image and four corners (two crop sizes), then centre using native BarcodeDetector, jsQR, and locally-bundled ZXing QR reader. Contrast-stretch and binary processing are attempted on candidates. A dense QR that is only a few pixels across each module cannot be recovered; take a closer, sharp photo in that case.
-- The optional crop editor now has bottom/right/top/centre presets, touch resize handles, zoom, and original-resolution scanning.
-- Face comparison supports a default-on *Improve low-quality selfies* checkbox, mild tone correction/upscaling, and two embeddings with a conservative agreement penalty. The success threshold is not secretly changed. Borderline or low-confidence photographs require manual review.
-- Camera capture selects the sharpest of three local frames, which is **not** proof of liveness. Spectacle reflections and covered facial features remain limitations. No identity probability or statistical recognition accuracy can be inferred from the display score.
-- ZXing is downloaded at GitHub build time and self-hosted on GitHub Pages. First load online; then caches allow offline use. Do not deploy only the source branch: deploy with the custom GitHub Actions workflow.
-
-### Validation status
-
-Only synthetic document photos are used in test fixtures; no real Aadhaar card or real-user face-recognition accuracy evaluation was performed. QR digital signatures remain unverified and face comparison is not official authentication.
+`ID Lens v3.2.0`, release build 21 October 2026 IST; shown in the application footer.

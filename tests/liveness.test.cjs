@@ -1,0 +1,17 @@
+const assert=require('node:assert/strict');
+const live=require('../liveness-core.js');
+const base={ear:.29,yaw:0,pitch:.39,smileSpread:1.50,cornerLift:.01,x:.5,y:.5,size:.34};
+let now=1000,st={};
+assert.equal(live.action('blink',base,{...base,ear:.17},st,now).done,false);
+assert.equal(live.action('blink',base,{...base,ear:.29},st,now+250).done,true);
+for (const type of ['turn','pitch','smile']) assert.equal(live.action(type,base,base,{},2000).done,false,'neutral should not pass '+type);
+assert.equal(live.action('turn',base,{...base,yaw:.27},{},2000).done,true);
+assert.equal(live.action('pitch',base,{...base,pitch:.48},{},2000).done,true);
+assert.equal(live.action('smile',base,{...base,smileSpread:1.67},{},2000).done,true);
+assert.equal(live.action('hold',base,base,{},2000).done,true);
+assert.equal(live.action('hold',base,{...base,yaw:.3},{},2000).done,false);
+assert.equal(live.continuous(base,{...base,x:.54}),true);
+assert.equal(live.continuous(base,{...base,x:.92}),false);
+const shuffled=live.shuffle(['blink','turn','pitch','smile'],new Uint8Array([4,1,8,12]));
+assert.deepEqual([...shuffled].sort(),['blink','turn','pitch','smile'].sort());
+console.log('Liveness geometry and challenge logic tests passed.');

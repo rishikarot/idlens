@@ -1,18 +1,19 @@
-# ID Lens v3.1.0 — 20 Oct 2026 · 10:26 PM IST
+# ID Lens v3.2.0 — 21 Oct 2026 IST
 
-- Scans dense QR from full Aadhaar images using multi-region multi-pass decoding and bundled ZXing fallback.
-- Adds quick-select crop presets for all four corners and center, preserving original image resolution.
-- Improves low-light / compressed selfie handling with quality-guided conservative correction and consistent result rules.
-- Captures best of 3 local video frames; does not imply liveness.
-- Bundles new QR decoder for offline after initial deployment.
+- Added live front-camera motion-challenge engine with a neutral-face calibration period.
+- Randomized blink / head turn / vertical head motion / smile, then front-facing stability.
+- Reject frozen frames, interrupted streams, backgrounded pages and multiple faces. Show per-action progress and informative retry paths.
+- Require real QR-extracted reference photo + live challenge proof in the same session before any facial comparison.
+- Removed photo/video upload routes from verification; Aadhaar document image and PDF upload remain available for QR extraction only.
+- Kept offline face models, crop/zoom and optional local model updates/rollback.
+- Add app/version/build footer, offline service worker assets, health checks and Node motion-geometry tests.
+- Important: prototype active liveness is not certified replay/deepfake/presentation-attack protection; UIDAI signature still unverified.
+
+# ID Lens v3.1.0 — 20 Oct 2026
+
+- Improved full-card QR region scanner with offline jsQR and ZXing; higher-resolution crop presets and PDF support.
+- Quality checks and controlled selfie tone correction (prior verification path no longer permitted).
 
 # ID Lens v3.0.1 — 20 Oct 2026
 
-- Added in-page setup diagnostics for shipped QR decoder, JPEG2000, PDF reader, face-api and weight shards.
-- Added actionable repair instructions and one-click cache reset.
-- Fixed setup headline incorrectly saying offline-ready before files are validated.
-- Added build verifier, generated asset-manifest.json and CI checks for all 16 assets.
-- Ensure GitHub Actions publish is the source; workflow runs on main or master.
-- Removed ignore rules that prevented locally fetched binary assets from being committed to a branch deployment.
-- Service worker refuses to activate incomplete offline cache, instead of quietly treating missing files as successes.
-- Preserved all v3 crop, matching, model update and threshold features.
+- Offline asset build and installation checks, proper GitHub Actions deployment, cache repair and local face model weights.
