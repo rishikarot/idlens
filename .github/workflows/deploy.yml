@@ -24,6 +24,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           cp index.html app.js liveness-core.js blink-core.js sw.js manifest.webmanifest asset-manifest.json dist/
+          test -s dist/blink-core.js
           touch dist/.nojekyll
           cp -R assets updates samples dist/
       - name: Configure Pages
