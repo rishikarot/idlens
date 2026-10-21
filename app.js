@@ -1,7 +1,7 @@
 /* ID Lens v3.2.0 — browser-local QR + face comparison; not official UIDAI authentication. */
 (()=>{'use strict';
 const $ = id => document.getElementById(id);
-const APP_VERSION = '3.3.0';
+const APP_VERSION = '3.3.1';
 const DEFAULTS={success:80,review:72,model:'enhanced'};
 const CACHE_PREFIX='id-lens-update-';
 let qrStream=null,selfieStream=null,scanTimer=null,qrGeneration=0,session=0;
@@ -228,10 +228,10 @@ async function livenessModels(){if(!liveModelPromise)liveModelPromise=(async()=>
  if(!window.faceapi||!window.IDLensMotion)throw Error('Bundled face/landmark code missing. Check installation');
  await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri('./assets/models'),faceapi.nets.faceLandmark68TinyNet.loadFromUri('./assets/models')]);
  })().catch(e=>{liveModelPromise=null;throw e;});return liveModelPromise;}
-const LIVE_LABELS={blink:'Blink once (close → open)',turn:'Turn your head left or right',pitch:'Look up or down',smile:'Smile clearly',hold:'Face forward and hold steady'};
+const LIVE_LABELS={blink:'Close eyes briefly, then open',turn:'Turn your head left or right',pitch:'Look up or down',smile:'Smile clearly',hold:'Face forward and hold steady'};
 
 const LIVE_GUIDANCE={
- blink:['A quick blink, please','Close both eyes for a moment, then open them normally.'],
+ blink:['Close your eyes gently','Keep your eyes closed for about one second, then open. I’ll let you know when I see them closed.'],
  turn:['Turn your head gently','Turn your face a little to the left or right, then keep your face visible in the camera.'],
  pitch:['Look up or down','Tilt your head slightly up or down. Keep your eyes and face within the oval.'],
  smile:['Show me a smile','Smile naturally for a moment. Keep your head facing the camera.'],
@@ -250,6 +250,7 @@ function explainLiveFailure(reason){
  if(/Multiple faces/i.test(reason))return 'I can see more than one person. Please move into the frame alone, then try again.';
  if(/Face lost|confidence|one clear|facial landmarks/i.test(reason))return 'I lost sight of your face. Move back a little, face the camera and keep your forehead and chin visible.';
  if(/continuous|tracking region|moved out/i.test(reason))return 'The face moved outside the guide. Stay in the oval and make smaller, slower movements.';
+ if(/Action timed out: Close eyes/i.test(reason))return 'That eye movement was tricky to see. Hold your eyes closed for about one second, then open. Avoid reflections on your glasses.';
  if(/timed out|Action timed out/i.test(reason))return 'That movement was a little hard to recognize. Try it again slowly, with your face fully visible.';
  if(/too dark|bright|blurry/i.test(reason))return 'The picture needs a little more light or steadier positioning. Try facing a window, without glare on your glasses.';
  if(/frozen/i.test(reason))return 'The camera video appears to have paused. Check camera permissions and lighting before you retry.';
@@ -320,7 +321,7 @@ async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveSta
   if(!selfieStream.getVideoTracks().some(t=>t.readyState==='live'&&!t.muted))throw Error('Camera stopped or paused');
   const now=performance.now();if(now-st.started>75000)throw Error('Live session timed out');
   if(st.phase==='calibrate'&&now-st.started>18000)throw Error('Unable to calibrate one clear, front-facing face');
-  if(st.phase==='challenge'&&now-st.stepStart>12000)throw Error('Action timed out: '+LIVE_LABELS[st.ordered[st.index]]);
+  if(st.phase==='challenge'&&now-st.stepStart>(st.ordered[st.index]==='blink'?16000:12000))throw Error('Action timed out: '+LIVE_LABELS[st.ordered[st.index]]);
   if(video.videoWidth&&video.readyState>=2){
    if(video.currentTime<=st.lastVideo+.025){if(++st.stalled>12)throw Error('Camera frames appear frozen');}
    else{
@@ -351,8 +352,14 @@ async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveSta
        // Prevent substitution of a different face without interrupting the track.
        if(Math.hypot(m.x-st.baseline.x,m.y-st.baseline.y)>.32||m.size/st.baseline.size<.54||m.size/st.baseline.size>1.8)throw Error('Face moved out of the allowed tracking region');
        const act=st.ordered[st.index],r=IDLensMotion.action(act,st.baseline,m,st.actionMemory,now);
+       if(act==='blink'&&r.stage!==st.blinkStage){
+        st.blinkStage=r.stage;
+        if(r.stage==='closed')guide('Eyes closed detected ✓','Great! Now open your eyes and look straight ahead.');
+        else if(r.stage==='waiting'&&st.actionMemory.closedFrames===0)guide('A gentle eye close','Close both eyes for about one second, then open. Keep your face in the oval.');
+        else if(r.stage==='complete')guide('Perfect — eyes open!','I detected your eye movement. Moving to the next action…');
+       }
        if(r.done){st.holdCount++;if(st.holdCount>= (act==='hold'?4:2)){
-        st.done.push(act);st.index++;st.holdCount=0;st.actionMemory={};st.stepStart=now;
+        st.done.push(act);st.index++;st.holdCount=0;st.actionMemory={};st.blinkStage=null;st.stepStart=now;
         if(st.index>=st.ordered.length){await finishLive(st,sequence);return;}displayAction(st);
        }}else st.holdCount=0;
       }
@@ -361,11 +368,11 @@ async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveSta
    }
   }
  }catch(e){if(sequence===liveSeq)failLive(e.message);return;}
- if(sequence===liveSeq&&selfieStream)liveTimer=setTimeout(()=>stepLive(sequence),140);
+ if(sequence===liveSeq&&selfieStream){const active=st.phase==='challenge'&&st.ordered[st.index]==='blink';liveTimer=setTimeout(()=>stepLive(sequence),active?45:140);}
 }
 function displayAction(st){const act=st.ordered[st.index];$('liveTitle').textContent='Action '+(st.index+1)+' / 5 · '+LIVE_LABELS[act];
  $('liveStep').textContent=(st.index)+' / 5';$('liveBar').style.width=st.index*20+'%';
- info('liveInstruction',LIVE_LABELS[act]+'. You have 12 seconds. Keep your face in view.');
+ info('liveInstruction',LIVE_LABELS[act]+(act==='blink'?'. You have 16 seconds. Close your eyes briefly, then reopen.':'. You have 12 seconds. Keep your face in view.'));
  const prompt=LIVE_GUIDANCE[act];guide(prompt[0],prompt[1]+` Step ${st.index+1} of 5 — take your time.`);coachActions(false);
  const rows=$('liveChecklist').children;
  for(let i=0;i<rows.length;i++){const key=['blink','turn','pitch','smile','hold'][i];const done=st.done.includes(key);rows[i].classList.toggle('ok',done);rows[i].textContent=(done?'✓ ':'○ ')+({blink:'Blink',turn:'Turn left/right',pitch:'Look up/down',smile:'Smile',hold:'Face stability'})[key];}}

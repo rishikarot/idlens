@@ -1,4 +1,4 @@
-/* ID Lens v3.2.0 — purely geometric, locally executed challenge features.
+/* ID Lens v3.3.1 — purely geometric, locally executed challenge features.
  * Heuristic active liveness only; not a presentation-attack detector or biometric certification.
  */
 (function(root,factory){const api=factory();if(typeof module==='object'&&module.exports)module.exports=api;else root.IDLensMotion=api;})(typeof globalThis!=='undefined'?globalThis:this,function(){'use strict';
@@ -23,9 +23,30 @@
  function continuous(previous,current){if(!previous)return true;return Math.hypot(previous.x-current.x,previous.y-current.y)<.25 && current.size/Math.max(.01,previous.size)>.58 && current.size/Math.max(.01,previous.size)<1.75;}
  function action(type,baseline,current,state,now){const s=state||{};
   if(type==='blink'){
-   if(!s.closedAt&&current.ear<Math.min(baseline.ear*.75,baseline.ear-.035))s.closedAt=now;
-   if(s.closedAt&&now-s.closedAt>1900)s.closedAt=0;
-   return {done:!!s.closedAt&&current.ear>baseline.ear*.9&&now-s.closedAt>130,description:'Close and reopen your eyes once'};
+   // Deliberate eyes-closed challenge rather than a sub-200 ms natural blink:
+   // frame-based face landmark inference on phones can miss a quick blink entirely.
+   // Calibrated with the neutral (eyes-open) EAR. Hysteresis prevents boundary flicker.
+   const open=Math.max(.01,baseline.ear);
+   const closedLimit=Math.max(.12,Math.min(open*.84,open-.025));
+   const openedLimit=Math.max(closedLimit+.023,open*.91);
+   if(s.completed)return {done:true,stage:'complete',description:'Eye movement recognized'};
+   if(!s.phase)s.phase='await_closed';
+   if(s.phase==='await_closed'){
+    if(current.ear<closedLimit){s.phase='closed';s.closedAt=now;s.closedFrames=1;}
+    return {done:false,stage:s.phase==='closed'?'closed':'waiting',description:'Close both eyes gently and hold for about one second'};
+   }
+   if(s.phase==='closed'){
+    if(now-s.closedAt>3200){s.phase='await_closed';s.closedFrames=0;return {done:false,stage:'waiting',description:'Let’s try that again. Close and then open your eyes'};}
+    if(current.ear<closedLimit){s.closedFrames++;return {done:false,stage:'closed',description:'Eyes closed detected — now open your eyes'};}
+    if(current.ear>openedLimit){
+     // Need observations of closed eyelids, not just a single landmark fluctuation.
+     if(s.closedFrames>=2&&now-s.closedAt>=220){s.completed=true;return {done:true,stage:'complete',description:'Eyes open again — great!'};}
+     s.phase='await_closed';s.closedFrames=0;
+     return {done:false,stage:'waiting',description:'Please hold your eyes closed a little longer, then open'};
+    }
+    return {done:false,stage:'closed',description:'Hold your eyes closed briefly, then open'};
+   }
+   return {done:false,stage:'waiting',description:'Close your eyes gently and then reopen'};
   }
   if(type==='turn')return {done:Math.abs(current.yaw-baseline.yaw)>.23,description:'Turn your head to one side'};
   if(type==='pitch')return {done:Math.abs(current.pitch-baseline.pitch)>.075,description:'Look up or down (move head, not just eyes)'};
