@@ -17,6 +17,14 @@ fetch 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js' "$ROOT/assets/vendo
 fetch 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js' "$ROOT/assets/vendor/zxing.min.js"
 fetch 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js' "$ROOT/assets/vendor/pdf.min.js"
 fetch 'https://raw.githubusercontent.com/kripken/j2k.js/master/openjpeg.js' "$ROOT/assets/vendor/openjpeg.js"
+# MediaPipe Face Landmarker, used ONLY for bilateral blink detection. Pin to an audited version.
+MP_BASE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21'
+mkdir -p "$ROOT/assets/vendor/mediapipe/wasm"
+fetch "$MP_BASE/vision_bundle.mjs" "$ROOT/assets/vendor/mediapipe/vision_bundle.mjs"
+for name in vision_wasm_internal.js vision_wasm_internal.wasm vision_wasm_nosimd_internal.js vision_wasm_nosimd_internal.wasm; do
+  fetch "$MP_BASE/wasm/$name" "$ROOT/assets/vendor/mediapipe/wasm/$name"
+done
+fetch 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task' "$ROOT/assets/models/face_landmarker.task"
 BASE='https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights'
 for f in \
   ssd_mobilenetv1_model-weights_manifest.json ssd_mobilenetv1_model-shard1 ssd_mobilenetv1_model-shard2 \

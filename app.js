@@ -1,7 +1,7 @@
 /* ID Lens v3.2.0 — browser-local QR + face comparison; not official UIDAI authentication. */
 (()=>{'use strict';
 const $ = id => document.getElementById(id);
-const APP_VERSION = '3.3.1';
+const APP_VERSION = '3.4.0';
 const DEFAULTS={success:80,review:72,model:'enhanced'};
 const CACHE_PREFIX='id-lens-update-';
 let qrStream=null,selfieStream=null,scanTimer=null,qrGeneration=0,session=0;
@@ -9,7 +9,29 @@ let currentSource=null,crop=null,pointer=null,zoom=1,panX=0,panY=0,moveImage=fal
 let ref='',selfie='',sourceType='',qrReady=false,portraitFound=false,faceModelPromise=null,modelLoaded='';
 let lastDistance=null,knownRefSource='none';
 let liveProof=null,liveSeq=0,liveTimer=null,liveState=null,liveModelPromise=null;
-const LIVE_MAX_RETRIES=3;let liveRetriesUsed=0;
+const LIVE_MAX_RETRIES=3;let liveRetriesUsed=0;let blinkLandmarkerPromise=null;
+const ACTION_KEYS=['blink','turn','pitch','smile','hold'];
+const ACTION_TEXT={blink:'Blink',turn:'Head turn',pitch:'Look up/down',smile:'Smile',hold:'Stability'};
+const ACTION_ICONS={
+ blink:'<path d="M2 12s3.6-5 10-5 10 5 10 5-3.6 5-10 5-10-5-10-5z"/><circle cx="12" cy="12" r="3"/>',
+ turn:'<path d="M5 7H2l3-3m-3 3a9 9 0 0 1 15-2M19 17h3l-3 3m3-3a9 9 0 0 1-15 2"/>',
+ pitch:'<path d="M12 3v18m-4-14 4-4 4 4M8 17l4 4 4-4"/>',
+ smile:'<circle cx="12" cy="12" r="9"/><path d="M8 14q4 5 8 0M8.5 10h.01M15.5 10h.01"/>',
+ hold:'<path d="M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3M3 16v3a2 2 0 0 0 2 2h3m13-5v3a2 2 0 0 1-2 2h-3"/><circle cx="12" cy="11" r="3"/>'
+};
+function svgIcon(key){return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ACTION_ICONS[key]}</svg>`;}
+function getActionConfig(){try{const o=JSON.parse(localStorage.getItem('idlens-v34-actions')||'{}');return Object.fromEntries(ACTION_KEYS.map(k=>[k,o[k]!==false]));}catch(e){return Object.fromEntries(ACTION_KEYS.map(k=>[k,true]));}}
+let actionConfig=getActionConfig();
+function syncActionConfig(){for(const k of ACTION_KEYS)$('act_'+k).checked=actionConfig[k];const count=ACTION_KEYS.filter(k=>actionConfig[k]).length;
+ $('actionSafety').textContent=count===5?'Default: all five checks are on. The four movements are randomized; stability is last.':count===0?'All checks disabled. The app will not allow identity verification. Enable at least one action.':`${count}/5 checks selected. Reduced challenge configuration: any face match will be marked REVIEW / TEST ONLY, never verified.`;
+ $('actionSafety').className='status'+(count===5?' ok':' error');
+}
+function saveActionConfig(){localStorage.setItem('idlens-v34-actions',JSON.stringify(actionConfig));syncActionConfig();if(selfieStream){info('faceStatus','Challenge configuration changed. Finish or restart the current camera session to use the new settings.');}else if(liveProof){liveProof=null;selfie='';$('selfieImg').classList.add('hidden');$('selfieImg').removeAttribute('src');$('selfieEmpty').classList.remove('hidden');refreshControls();}}
+function challengeActions(){const enabled=['blink','turn','pitch','smile'].filter(k=>actionConfig[k]);const b=new Uint8Array(8);crypto.getRandomValues(b);const ordered=IDLensMotion.shuffle(enabled,b);if(actionConfig.hold)ordered.push('hold');return ordered;}
+function paintChecklist(st){const current=st?.ordered||challengeActions(),done=st?.done||[];const list=$('liveChecklist');list.replaceChildren();for(const key of ACTION_KEYS){const enabled=current.includes(key),passed=done.includes(key);const chip=document.createElement('span');chip.className='actionchip'+(passed?' ok':enabled?'':' disabled');chip.innerHTML=svgIcon(key)+`<span>${ACTION_TEXT[key]}</span>`+(passed?'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-label="Passed"><path d="m5 12 5 5L20 7"/></svg>':enabled?'':'<small>Off</small>');list.append(chip);}}
+function paintOverlay(st){const count=st?.ordered?.length||ACTION_KEYS.filter(k=>actionConfig[k]).length;const done=st?.done||[];const active=st?.ordered?.[st.index];$('overlayStep').textContent=`${Math.min(count,done.length+1)} / ${count}`;
+ $('overlayTitle').textContent=active?LIVE_LABELS[active]:'Look into the camera';const passed=$('overlayPassed');passed.replaceChildren();for(const key of done){const chip=document.createElement('span');chip.className='passedicon';chip.innerHTML=svgIcon(key)+'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m5 12 5 5L20 7"/></svg>';chip.title=ACTION_TEXT[key]+' passed';passed.append(chip);}}
+
 const LIVE_ACTIONS=['blink','turn','pitch','smile','hold'];
 const LIMITS={zip:50000,raw:180000};
 const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
@@ -28,7 +50,7 @@ function updatedPack(){try{return JSON.parse(localStorage.getItem('idlens-v3-pac
 function refreshControls(){const enabled=qrReady,hasReference=enabled&&portraitFound&&knownRefSource==='qr';
  $('facePanel').classList.toggle('locked',!enabled);
  $('step1').className='step '+(enabled?'done':'current');$('step2').className='step '+(enabled?'current':'');
- $('faceTag').textContent=!enabled?'Waiting for QR':!hasReference?'QR portrait required':liveProof?'Live check passed':'Live check required';
+ $('faceTag').textContent=!enabled?'Waiting for QR':!hasReference?'QR portrait required':liveProof?(liveProof.reduced?'Reduced checks · demo':'Motion checks passed'):'Live check required';
  $('openSelfie').disabled=!(hasReference&&$('consent').checked)||!!selfieStream;
  $('matchButton').disabled=!(hasReference&&selfie&&liveProof&&liveProof.session===session&&performance.now()<liveProof.expires&&$('consent').checked);
 }
@@ -215,7 +237,7 @@ async function startQr(){stopQr();closeSelfie(false);clearPictures();qrReady=fal
 // Only an actively running getUserMedia video stream may supply verification images.
 function clearLiveUI(title='Camera challenge not started',message='Start the live challenge after scanning your Aadhaar QR portrait.'){
  $('liveTitle').textContent=title;$('liveStep').textContent='0 / 5';$('liveBar').style.width='0%';info('liveInstruction',message);
- for(const el of $('liveChecklist').children){el.classList.remove('ok');el.textContent='○ '+el.textContent.replace(/^[○✓] /,'');}
+ paintChecklist();paintOverlay();
 }
 function invalidateLiveness(){liveProof=null;liveState=null;liveSeq++;if(liveTimer){clearTimeout(liveTimer);liveTimer=null;}
  if($('liveTitle'))clearLiveUI();}
@@ -224,9 +246,19 @@ function closeSelfie(preserveProof=false){liveSeq++;if(liveTimer)clearTimeout(li
  $('selfieVideo').srcObject=null;$('selfieStage').classList.add('hidden');$('passportHelp').classList.add('hidden');$('liveCoach').classList.add('hidden');coachActions(false);$('closeSelfie').classList.add('hidden');$('openSelfie').classList.remove('hidden');
  if(!preserveProof){liveRetriesUsed=0;liveProof=null;liveState=null;const img=$('selfieImg');img.removeAttribute('src');img.classList.add('hidden');$('selfieEmpty').classList.remove('hidden');selfie='';lastDistance=null;clearLiveUI();}
  refreshControls();}
+async function blinkModels(){if(!blinkLandmarkerPromise)blinkLandmarkerPromise=(async()=>{
+ if(!window.IDLensBlink)throw Error('Bilateral blink logic unavailable. Check installation.');
+ // MediaPipe's vision_bundle.mjs may expose its API through the default export.
+ // Resolve both forms without relying on a runtime CDN or silently falling back to weak EAR.
+ const imported=await import('./assets/vendor/mediapipe/vision_bundle.mjs');
+ const sdk=imported?.FaceLandmarker&&imported?.FilesetResolver?imported:imported?.default;
+ if(!sdk?.FaceLandmarker||!sdk?.FilesetResolver)throw Error('Local MediaPipe module has an unsupported export format');
+ const vision=await sdk.FilesetResolver.forVisionTasks(new URL('./assets/vendor/mediapipe/wasm/',document.baseURI).href);
+ return sdk.FaceLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:new URL('./assets/models/face_landmarker.task',document.baseURI).href,delegate:'CPU'},runningMode:'VIDEO',numFaces:2,outputFaceBlendshapes:true,minFaceDetectionConfidence:.45,minFacePresenceConfidence:.45,minTrackingConfidence:.45});
+ })().catch(e=>{blinkLandmarkerPromise=null;throw Error('Blink model could not load: '+e.message+' (do not bypass this step silently)')});return blinkLandmarkerPromise;}
 async function livenessModels(){if(!liveModelPromise)liveModelPromise=(async()=>{
  if(!window.faceapi||!window.IDLensMotion)throw Error('Bundled face/landmark code missing. Check installation');
- await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri('./assets/models'),faceapi.nets.faceLandmark68TinyNet.loadFromUri('./assets/models')]);
+ await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri('./assets/models'),faceapi.nets.faceLandmark68TinyNet.loadFromUri('./assets/models'),...(actionConfig.blink?[blinkModels()]:[])]);
  })().catch(e=>{liveModelPromise=null;throw e;});return liveModelPromise;}
 const LIVE_LABELS={blink:'Close eyes briefly, then open',turn:'Turn your head left or right',pitch:'Look up or down',smile:'Smile clearly',hold:'Face forward and hold steady'};
 
@@ -248,6 +280,7 @@ function coachActions(showRetry=false){
 }
 function explainLiveFailure(reason){
  if(/Multiple faces/i.test(reason))return 'I can see more than one person. Please move into the frame alone, then try again.';
+ if(/Blink model could not load/i.test(reason))return 'The advanced eye detector is unavailable. Check installation, then retry. Blink will not be silently skipped.';
  if(/Face lost|confidence|one clear|facial landmarks/i.test(reason))return 'I lost sight of your face. Move back a little, face the camera and keep your forehead and chin visible.';
  if(/continuous|tracking region|moved out/i.test(reason))return 'The face moved outside the guide. Stay in the oval and make smaller, slower movements.';
  if(/Action timed out: Close eyes/i.test(reason))return 'That eye movement was tricky to see. Hold your eyes closed for about one second, then open. Avoid reflections on your glasses.';
@@ -265,8 +298,9 @@ function newChallengeAttempt(){
  const sequence=liveSeq,v=$('selfieVideo');
  liveState={phase:'calibrate',started:performance.now(),stepStart:0,lastVideo:v.currentTime-.08,stalled:0,lost:0,frames:0,
  baseline:null,samples:[],previous:null,ordered:secureShuffleActions(),index:0,actionMemory:{},holdCount:0,done:[],session};
+  if(!liveState.ordered.length)throw Error('Enable at least one liveness action in Settings');
  clearLiveUI('Getting the camera ready','First, look straight ahead with your eyes open. We will guide you through each movement.');
- guide('Hello! Let’s line up your face','Stay comfortably in the center of the oval. Keep your forehead and chin in view. This should only take a moment.');
+ guide('Hello! Let’s line up your face','Stay comfortably in the center of the oval. Keep your forehead and chin in view. This should only take a moment.');paintChecklist(liveState);paintOverlay(liveState);
  coachActions(false);info('faceStatus','Live camera is active. Follow the friendly guide below the video.');
  refreshControls();liveTimer=setTimeout(()=>stepLive(sequence),200);
 }
@@ -280,7 +314,7 @@ function restartChallenge(){
  liveRetriesUsed=0;newChallengeAttempt();
 }
 
-function secureShuffleActions(){const b=new Uint8Array(8);crypto.getRandomValues(b);return [...IDLensMotion.shuffle(['blink','turn','pitch','smile'],b),'hold'];}
+function secureShuffleActions(){return challengeActions();}
 function captureLiveFrame(){const v=$('selfieVideo'),c=document.createElement('canvas');c.width=v.videoWidth;c.height=v.videoHeight;
  if(!c.width||!c.height)throw Error('Camera image unavailable');c.getContext('2d').drawImage(v,0,0);return c;}
 function failLive(reason,stopCamera=false){
@@ -302,30 +336,52 @@ function failLive(reason,stopCamera=false){
 }
 async function openSelfie(){if(!qrReady||!portraitFound||knownRefSource!=='qr')return info('faceStatus','Read the QR and extract its embedded photograph first. Demo or manually supplied photos cannot verify.','error');
  if(!$('consent').checked)return info('faceStatus','Please confirm consent before enabling your camera.','error');
+ if(!ACTION_KEYS.some(k=>actionConfig[k]))return info('faceStatus','Enable at least one challenge in Settings first. No liveness check means no verification.','error');
  closeSelfie(false);stopQr();const sequence=++liveSeq;
  try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Front camera unavailable (HTTPS required)');
   info('faceStatus','Starting front camera and loading offline landmark detector…');
   selfieStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'user'},aspectRatio:{ideal:0.78},width:{ideal:720},height:{ideal:960},frameRate:{ideal:20}},audio:false});
   if(sequence!==liveSeq){selfieStream?.getTracks().forEach(x=>x.stop());return;}
   $('selfieVideo').srcObject=selfieStream;await $('selfieVideo').play();
-  $('selfieStage').classList.remove('hidden');$('passportHelp').classList.remove('hidden');$('closeSelfie').classList.remove('hidden');$('openSelfie').classList.add('hidden');
+  $('selfieStage').classList.remove('hidden');$('passportHelp').classList.remove('hidden');paintOverlay();paintChecklist();$('closeSelfie').classList.remove('hidden');$('openSelfie').classList.add('hidden');
   $('selfieStage').scrollIntoView({behavior:'smooth',block:'start'});
   await livenessModels();if(sequence!==liveSeq)return;
   liveRetriesUsed=0;
   newChallengeAttempt();
  }catch(e){if(sequence!==liveSeq)return;failLive(e.message);}
 }
+async function advanceLiveAction(st,sequence,now){
+ const action=st.ordered[st.index];st.done.push(action);st.index++;st.holdCount=0;st.actionMemory={};st.blinkStage=null;st.stepStart=now;paintChecklist(st);paintOverlay(st);
+ if(st.index>=st.ordered.length){await finishLive(st,sequence);return true;}displayAction(st);return false;
+}
 async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveState)return;const st=liveState,video=$('selfieVideo');
  try{
   if(document.hidden)throw Error('Screen/app became hidden');
   if(!selfieStream.getVideoTracks().some(t=>t.readyState==='live'&&!t.muted))throw Error('Camera stopped or paused');
-  const now=performance.now();if(now-st.started>75000)throw Error('Live session timed out');
+  const now=performance.now();if(now-st.started>100000)throw Error('Live session timed out');
   if(st.phase==='calibrate'&&now-st.started>18000)throw Error('Unable to calibrate one clear, front-facing face');
-  if(st.phase==='challenge'&&now-st.stepStart>(st.ordered[st.index]==='blink'?16000:12000))throw Error('Action timed out: '+LIVE_LABELS[st.ordered[st.index]]);
+  if(st.phase==='challenge'&&now-st.stepStart>(st.ordered[st.index]==='blink'?18000:12000))throw Error('Action timed out: '+LIVE_LABELS[st.ordered[st.index]]);
   if(video.videoWidth&&video.readyState>=2){
    if(video.currentTime<=st.lastVideo+.025){if(++st.stalled>12)throw Error('Camera frames appear frozen');}
    else{
     st.lastVideo=video.currentTime;st.stalled=0;
+    const isBlink=st.phase==='challenge'&&st.ordered[st.index]==='blink';
+    if(isBlink){
+      const engine=await blinkModels();if(sequence!==liveSeq||!selfieStream)return;
+      const mp=engine.detectForVideo(video,now);
+      const meshes=mp.faceLandmarks||[];
+      if(meshes.length!==1){if(meshes.length>1)throw Error('Multiple faces detected — restart required');if(++st.lost>12)throw Error('Face lost; please reduce glasses glare');}
+      else{
+       const box=IDLensBlink.faceBox(meshes[0]);if(!box)throw Error('Face landmarks unavailable in blink detector');
+       if(st.previousBlink&&!IDLensMotion.continuous(st.previousBlink,box))throw Error('Continuous face tracking interrupted');
+       if(st.previousBlink&&Math.hypot(box.x-st.previousBlink.x,box.y-st.previousBlink.y)>.12)throw Error('Face movement too large during blink');
+       st.previousBlink=box;st.lost=0;st.frames++;
+       const scores=IDLensBlink.fromResult(mp);
+       const r=IDLensBlink.step(scores,st.actionMemory,now);$('blinkMetrics').textContent=`Glasses-friendly eye detector · Left ${Number.isFinite(scores.left)?Math.round(scores.left*100)+'%':'—'} · Right ${Number.isFinite(scores.right)?Math.round(scores.right*100)+'%':'—'} · ${r.stage}. These are eye-closure signals, not identity accuracy.`;
+       if(r.stage!==st.blinkStage){st.blinkStage=r.stage;guide(r.stage==='closed'?'Eyes closed ✓':r.stage==='opening'?'Eyes reopened ✓':r.stage==='complete'?'Excellent!':'Let’s catch your blink',r.message);}
+       if(r.done){const finished=await advanceLiveAction(st,sequence,now);if(finished)return;}
+      }
+    } else {
     const opts=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:.33});
     const detections=await faceapi.detectAllFaces(video,opts).withFaceLandmarks(true);
     if(sequence!==liveSeq||!selfieStream)return;
@@ -337,13 +393,13 @@ async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveSta
      else{
       st.lost=0;st.previous=m;
       if(st.phase==='calibrate'){
-       const goodPosition=m.ear>.16&&m.size>.17&&m.size<.8&&Math.abs(m.x-.5)<.28&&Math.abs(m.y-.5)<.30;
+       const goodPosition=m.ear>.105&&m.size>.17&&m.size<.8&&Math.abs(m.x-.5)<.28&&Math.abs(m.y-.5)<.30;
        if(goodPosition){st.samples.push(m);if(st.alignCue!=='ready'){st.alignCue='ready';guide('That’s it — hold still','Perfect! Keep looking at the camera with your eyes open while I get ready.')}}
        else{st.samples=[];
         let cue='center',message='Move your face toward the centre of the oval.';
         if(m.size<=.17){cue='closer';message='Come a little closer so I can see your features clearly.';}
         else if(m.size>=.8){cue='farther';message='Move slightly farther from the camera so your forehead and chin fit.';}
-        else if(m.ear<=.16){cue='eyes';message='Look straight at the camera and keep both eyes open for a moment.';}
+        else if(m.ear<=.105){cue='eyes';message='Look straight at the camera and keep both eyes open for a moment.';}
         if(cue!==st.alignCue){st.alignCue=cue;guide('A tiny adjustment, please',message);}
        }
        $('liveTitle').textContent='Calibrating neutral face ('+Math.min(7,st.samples.length)+'/7)';
@@ -352,38 +408,33 @@ async function stepLive(sequence){if(sequence!==liveSeq||!selfieStream||!liveSta
        // Prevent substitution of a different face without interrupting the track.
        if(Math.hypot(m.x-st.baseline.x,m.y-st.baseline.y)>.32||m.size/st.baseline.size<.54||m.size/st.baseline.size>1.8)throw Error('Face moved out of the allowed tracking region');
        const act=st.ordered[st.index],r=IDLensMotion.action(act,st.baseline,m,st.actionMemory,now);
-       if(act==='blink'&&r.stage!==st.blinkStage){
-        st.blinkStage=r.stage;
-        if(r.stage==='closed')guide('Eyes closed detected ✓','Great! Now open your eyes and look straight ahead.');
-        else if(r.stage==='waiting'&&st.actionMemory.closedFrames===0)guide('A gentle eye close','Close both eyes for about one second, then open. Keep your face in the oval.');
-        else if(r.stage==='complete')guide('Perfect — eyes open!','I detected your eye movement. Moving to the next action…');
-       }
-       if(r.done){st.holdCount++;if(st.holdCount>= (act==='hold'?4:2)){
-        st.done.push(act);st.index++;st.holdCount=0;st.actionMemory={};st.blinkStage=null;st.stepStart=now;
-        if(st.index>=st.ordered.length){await finishLive(st,sequence);return;}displayAction(st);
+       if(r.done){st.holdCount++;if(st.holdCount>=(act==='hold'?4:2)){
+        const finished=await advanceLiveAction(st,sequence,now);if(finished)return;
        }}else st.holdCount=0;
       }
      }
+    }
     }
    }
   }
  }catch(e){if(sequence===liveSeq)failLive(e.message);return;}
  if(sequence===liveSeq&&selfieStream){const active=st.phase==='challenge'&&st.ordered[st.index]==='blink';liveTimer=setTimeout(()=>stepLive(sequence),active?45:140);}
 }
-function displayAction(st){const act=st.ordered[st.index];$('liveTitle').textContent='Action '+(st.index+1)+' / 5 · '+LIVE_LABELS[act];
- $('liveStep').textContent=(st.index)+' / 5';$('liveBar').style.width=st.index*20+'%';
- info('liveInstruction',LIVE_LABELS[act]+(act==='blink'?'. You have 16 seconds. Close your eyes briefly, then reopen.':'. You have 12 seconds. Keep your face in view.'));
- const prompt=LIVE_GUIDANCE[act];guide(prompt[0],prompt[1]+` Step ${st.index+1} of 5 — take your time.`);coachActions(false);
- const rows=$('liveChecklist').children;
- for(let i=0;i<rows.length;i++){const key=['blink','turn','pitch','smile','hold'][i];const done=st.done.includes(key);rows[i].classList.toggle('ok',done);rows[i].textContent=(done?'✓ ':'○ ')+({blink:'Blink',turn:'Turn left/right',pitch:'Look up/down',smile:'Smile',hold:'Face stability'})[key];}}
+function displayAction(st){const act=st.ordered[st.index];if(!act)return;
+ $('liveTitle').textContent='Action '+(st.index+1)+' / '+st.ordered.length+' · '+LIVE_LABELS[act];
+ $('liveStep').textContent=st.index+' / '+st.ordered.length;$('liveBar').style.width=st.index/st.ordered.length*100+'%';
+ info('liveInstruction',LIVE_LABELS[act]+(act==='blink'?'. Follow the prompt at top of the video; close eyes briefly then reopen.':' · 12 seconds. Keep your face visible.'));
+ const prompt=LIVE_GUIDANCE[act];guide(prompt[0],prompt[1]+` Step ${st.index+1} of ${st.ordered.length}.`);coachActions(false);if(act!=='blink')$('blinkMetrics').textContent='Eye diagnostics appear only during the blink step.';
+ paintChecklist(st);paintOverlay(st);
+}
 async function finishLive(st,sequence){if(sequence!==liveSeq||!selfieStream)return;
  try{const frame=captureLiveFrame(),q=photoQuality(frame);if(q.focusScore<6||q.brightness<36||q.brightness>230)throw Error('Final selfie is too dark, bright or blurry; retake the live challenge');
   const image=frame.toDataURL('image/jpeg',.93);
-  liveProof={session,created:performance.now(),expires:performance.now()+60000,frames:st.frames,order:[...st.ordered]};
+  liveProof={session,created:performance.now(),expires:performance.now()+60000,frames:st.frames,order:[...st.ordered],reduced:st.ordered.length<5};
   setPicture('selfie',image,'camera-liveness');closeSelfie(true);
-  $('liveTitle').textContent='Live challenge completed';$('liveStep').textContent='5 / 5';$('liveBar').style.width='100%';
-  info('liveInstruction','All 5 actions passed in one uninterrupted camera session. Now compare within 60 seconds.','ok');
-  const rows=$('liveChecklist').children;for(let i=0;i<rows.length;i++){rows[i].classList.add('ok');rows[i].textContent=rows[i].textContent.replace(/^○ /,'✓ ');}
+  $('liveTitle').textContent='Live challenge completed';$('liveStep').textContent=st.ordered.length+' / '+st.ordered.length;$('liveBar').style.width='100%';paintChecklist(st);paintOverlay(st);
+  info('liveInstruction',`All ${st.ordered.length} enabled checks passed. ${st.ordered.length<5?'Reduced challenge — test only.':'Now compare within 60 seconds.'}`,'ok');
+  // SVG pass icons rendered by paintChecklist above.
   $('selfieInfo').textContent='Fresh camera image · '+st.frames+' observed frames · prototype liveness passed';
   info('faceStatus','Prototype live-motion challenge passed. Run face comparison within 60 seconds. Not certified anti-spoofing.','ok');refreshControls();
  }catch(e){failLive(e.message);}}
@@ -446,8 +497,9 @@ function renderDistance(distance){const score=similarityIndex(distance),state=la
  const description=`Distance ${distance.toFixed(3)}. Similarity index ${score}% (not identity probability). `+
  `Current rules: success ≥${prefs.success}%, review ${prefs.review}–${prefs.success-1}%, failure <${prefs.review}%. `+
  (isQR?'Reference originated in the QR; UIDAI signature unchecked.':'Reference was uploaded manually: demo only.')+
- ' Camera-only prototype liveness: '+(liveProof?'passed':'not passed')+'. Not certified against replay/virtual-camera attacks.';
- if(matchQualityReview&&state==='match')showResult('REVIEW · IMAGE QUALITY',score,description+' '+matchDiagnostics+' Automatic success withheld due to low image quality.','review');
+ ' Camera-only prototype liveness: '+(liveProof?.reduced?'REDUCED CONFIG / TEST ONLY':liveProof?'all steps passed':'not passed')+'. Not certified against replay/virtual-camera attacks.';
+ if(liveProof?.reduced&&state==='match')showResult('REVIEW · REDUCED LIVENESS',score,description+' Disabled challenges prevent a full pass. This is a demo-only match, not identity verification.','review');
+ else if(matchQualityReview&&state==='match')showResult('REVIEW · IMAGE QUALITY',score,description+' '+matchDiagnostics+' Automatic success withheld due to low image quality.','review');
  else showResult(title,score,description+' '+matchDiagnostics,state==='match'?'success':state==='review'?'review':'fail');}
 async function detectOne(source,options){
  const faces=await faceapi.detectAllFaces(source,options).withFaceLandmarks(prefs.model==='fast').withFaceDescriptors();
@@ -542,6 +594,11 @@ async function restoreDefault(){const packs=await caches.keys();for(const key of
 const HEALTH_ASSETS=[
  ['./asset-manifest.json','Build manifest','build'],
  ['./liveness-core.js','Live action detection logic','live'],
+ ['./blink-core.js','Bilateral blink challenge logic','live'],
+ ['./assets/vendor/mediapipe/vision_bundle.mjs','MediaPipe runtime (ES module)','face'],
+ ['./assets/vendor/mediapipe/wasm/vision_wasm_internal.js','MediaPipe WASM loader','face'],
+ ['./assets/vendor/mediapipe/wasm/vision_wasm_internal.wasm','MediaPipe WASM binary','weights'],
+ ['./assets/models/face_landmarker.task','Face landmarker model','weights'],
  ['./assets/vendor/jsQR.js','QR decoder · jsQR','jsqr'],
   ['./assets/vendor/zxing.min.js','QR decoder · ZXing','zxing'],
  ['./assets/vendor/openjpeg.js','JPEG 2000 decoder','jpeg2000'],
@@ -573,7 +630,7 @@ async function probe(path,label,type){
     const text=await r.text();
     try{const data=JSON.parse(text);if(data.built!==true||data.version!=='3.2.0'||!Array.isArray(data.files))throw Error('Invalid build manifest');
       return {label,type,ok:true,path,size:JSON.stringify(data.files).length};
-    }catch(e){return {label,type,ok:false,why:'Not a v3.2.0 asset build',path};}
+    }catch(e){return {label,type,ok:false,why:'Not a v3.4.0 asset build',path};}
   }
   const length=Number(response.headers.get('content-length'));
   if(ct.includes('text/html'))return {label,type,ok:false,why:'HTML returned instead of asset',path};
@@ -585,7 +642,7 @@ async function probe(path,label,type){
    // An already-cached app remains usable without any network.
    try{
      if('caches' in window){const saved=await caches.match(new URL(path,location.href));
-       if(saved&&saved.ok){if(type==='build'){const d=await saved.clone().json();if(d.built!==true||d.version!=='3.2.0')throw Error('Outdated build manifest')}
+       if(saved&&saved.ok){if(type==='build'){const d=await saved.clone().json();if(d.built!==true||d.version!=='3.4.0')throw Error('Outdated build manifest')}
          return {label,type,ok:true,path,cached:true};}}
    }catch(ignore){}
    return {label,type,ok:false,why:e.message,path};
@@ -597,9 +654,9 @@ async function checkInstallation(){
  try{
   const results=await Promise.all(HEALTH_ASSETS.map(row=>probe(...row)));
   const bad=results.filter(r=>!r.ok);
-  const requiredLoaded=typeof window.jsQR==='function'&&!!window.ZXing?.BrowserQRCodeReader&&typeof window.openjpeg==='function'&&!!window.pdfjsLib&&!!window.faceapi&&!!window.IDLensMotion;
+  const requiredLoaded=typeof window.jsQR==='function'&&!!window.ZXing?.BrowserQRCodeReader&&typeof window.openjpeg==='function'&&!!window.pdfjsLib&&!!window.faceapi&&!!window.IDLensMotion&&!!window.IDLensBlink;
   const details=results.map(r=>(r.ok?'✓ ':'✗ ')+r.label+' · '+r.path+(r.ok?'':' ('+r.why+')'));
-  if(!requiredLoaded){const miss=[typeof window.jsQR==='function'?null:'jsQR',window.ZXing?.BrowserQRCodeReader?null:'ZXing',typeof window.openjpeg==='function'?null:'openjpeg',window.pdfjsLib?null:'pdfjs',window.faceapi?null:'face-api',window.IDLensMotion?null:'liveness-core'].filter(Boolean);details.push('Loaded JS globals missing: '+miss.join(', '));}
+  if(!requiredLoaded){const miss=[typeof window.jsQR==='function'?null:'jsQR',window.ZXing?.BrowserQRCodeReader?null:'ZXing',typeof window.openjpeg==='function'?null:'openjpeg',window.pdfjsLib?null:'pdfjs',window.faceapi?null:'face-api',window.IDLensMotion?null:'liveness-core',window.IDLensBlink?null:'blink-core'].filter(Boolean);details.push('Loaded JS globals missing: '+miss.join(', '));}
   $('installDetails').textContent=details.join('\n');
   if(bad.length||!requiredLoaded){
     $('installationHealth').className='health bad';$('installHeadline').textContent='Installation incomplete · '+bad.length+' missing / invalid files';
@@ -622,6 +679,9 @@ async function repairInstallation(){
   location.reload();
  }catch(e){$('installSummary').textContent='Cache refresh failed: '+e.message}
 }
+for(const key of ACTION_KEYS){$('act_'+key).addEventListener('change',e=>{actionConfig[key]=e.target.checked;saveActionConfig();});}
+$('resetActions').addEventListener('click',()=>{actionConfig=Object.fromEntries(ACTION_KEYS.map(k=>[k,true]));saveActionConfig();});
+syncActionConfig();paintChecklist();
 $('checkInstallation').addEventListener('click',checkInstallation);
 $('repairInstallation').addEventListener('click',repairInstallation);
 // UI events

@@ -27,3 +27,9 @@
 # ID Lens v3.0.1 — 20 Oct 2026
 
 - Offline asset build and installation checks, proper GitHub Actions deployment, cache repair and local face model weights.
+
+## 3.3.1 — Eye closure recognition and guidance (21 Oct 2026)
+- Replaces hard-to-sample natural blink with a deliberate ~1-second eyes-closed-then-open challenge.
+- Calibrated EAR hysteresis, two closed-eye observations and reopening requirement.
+- Shorter scheduling delay during blink detection, inline "Eyes closed — now open" coaching, and 16-second timeout.
+- Increments offline service worker cache key to ensure refreshed logic.

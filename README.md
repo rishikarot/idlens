@@ -1,4 +1,13 @@
-# ID Lens v3.2.0 — offline-first QR → live motion challenges → face match
+## v3.3.0 — Guided live verification
+
+- Larger 3:4 portrait live preview, up to 430px wide, and `object-fit: contain` so the video is not cropped just to fill its container. The browser still chooses the actual supported camera format.
+- Conversational instructions appear immediately below the camera for calibration and each randomized challenge.
+- A failed motion, temporary face loss, or timeout **pauses** the challenge with the camera still visible; there are **three retries** within the same camera session, each restarting calibration and all five randomized actions. When those retries are used, the user can deliberately start a new verification sequence. Retrying never grants automatic success.
+- On browser backgrounding, consent withdrawal, loss of camera permission, or the Stop button, the camera is closed and verification must begin again. This is intentional fail-closed behavior.
+- No video or selfie upload for verification, Aadhaar QR portrait is still required, match button remains disabled without fresh live proof.
+- This is heuristic active liveness only, not certified replay/deepfake protection.
+
+# ID Lens v3.3.0 — offline-first QR → live motion challenges → face match
 
 **Released:** 21 October 2026 (IST). **Purpose:** research / MVP, NOT UIDAI authentication or certified presentation-attack detection.
 
@@ -69,4 +78,4 @@ Open `http://localhost:8000`, or deploy to a HTTPS site for `getUserMedia` on iP
 
 ## Release identification
 
-`ID Lens v3.2.0`, release build 21 October 2026 IST; shown in the application footer.
+`ID Lens v3.3.0`, release build 21 October 2026 IST; shown in the application footer.
